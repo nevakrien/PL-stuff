@@ -56,6 +56,8 @@ typedef enum OP_KIND : uoffset_t {
     OP_CALL,
     OP_RET,
 
+    OP_CRASH,//unwinds the entire stack
+
     OP_NEST_BLOCK,
     OP_TAIL_BLOCK,
     OP_NEST_BRANCH_BLOCK,

@@ -1,33 +1,7 @@
 #include "vm.h"
 
-static int ret_block(VM* vm){
-	if(!vm->block_stack.len) return 1;
-	BlockFrame b = TOP(vm->block_stack);
-	FuncFrame f = TOP(vm->func_stack);
-	
-	const Func* func = &vm->functions.data[f.fid];
-	const Block* block = &func->blocks.data[b.bid];
-
-	if(b.ip >= block->body_start && b.ip<block->body_end){
-		//go run epilogue
-		TOP(vm->block_stack).ip = block->body_end;
-		//probably want a goto interpter here... or a continue
-		//so this likely wants to be a case in the main body
-	} 
-
-	vm->block_stack.len--;
-	if(vm->block_stack.len <= f.block_stack_len){
-		//return out of function
-	}
-
-	return 0;
-}
-
-static int pop_func(VM* vm){
-	if(vm->func_stack.len==0) return 1;
-	vm->block_stack.len = vm->func_stack.data[--vm->func_stack.len].block_stack_len;
-	return 0;
-}
+#define UNWIND_FUNC  ((count_t)-2)
+#define UNWIND_CRASH ((count_t)-1)
 
 
 int run_vm(VM* vm){	
@@ -41,39 +15,64 @@ int run_vm(VM* vm){
 		const Func* func = &vm->functions.data[f.fid];
 		const Block* block = &func->blocks.data[b.bid];
 
-		if(b.ip>=block->ops.len){
-	block_pop:
-			//need to add aditional logic for actual param stack
-			vm->block_stack.len--;
-			if(vm->block_stack.len <= f.block_stack_len){
-				vm->func_stack.len--;
+		if(vm->unwind){
+			if(b.op<block->body_start){
+				goto block_pop;
 			}
-			continue;
+
+			if(b.ip < block->body_end){
+				//Run the block epilogue before actually leaving the block.
+				b.ip = block->body_end;
+				TOP(vm->block_stack) = b;
+				continue;
+			}
+
+		} 
+
+		if(b.ip >= block->ops.len){
+			goto block_pop;
 		}
 
+		OP op = block->ops.data[b.ip];
+		switch (op) {
+		case OP_CRASH:
+			vm->unwind = UNWIND_CRASH;
+			goto next;
 
-		switch (block->ops.data[b.ip].kind) {
-			
+		case OP_RET:
+			if(vm->unwind!=UNWIND_CRASH){
+				vm->unwind = UNWIND_FUNC;
+			}
+			goto next;
+
+		case OP_RET_BLOCKS:
+			if(vm->unwind!=UNWIND_CRASH && vm->unwind!=UNWIND_FUNC){
+				vm->unwind = op.extra;
+			}
+			goto next;
 		}
-
-		goto next;
-
-	ret_block:
-		if(b.ip >= block->body_start && b.ip<block->body_end){
-			//go run epilogue
-			TOP(vm->block_stack).ip = block->body_end;
-			continue;
-			
-		}
-
-		goto block_pop;
 
 	next:
 		b.ip++;
-		TOP(vm->block_stack)=b;
+		TOP(vm->block_stack) = b;
+		continue;
 
-		if(b.ip >= block->ops.len){	
-			goto ret_block;
-		}
+	block_pop:
+			if(block->var.tid != (size_t)(-1)){
+				//TODO look up the var size and pop it out
+			}
+
+			vm->block_stack.len--;
+			if(vm->unwind && vm->unwind != UNWIND_FUNC && vm->unwind != UNWIND_CRASH){
+				vm->unwind--;
+			}
+
+			if(vm->block_stack.len <= f.block_stack_len){
+				vm->func_stack.len--;
+				if(vm->unwind != UNWIND_CRASH){
+					vm->unwind = 0;
+				}
+			}
+			continue;
 	}
 }
