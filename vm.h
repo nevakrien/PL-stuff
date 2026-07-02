@@ -29,6 +29,7 @@ typedef struct VM {
 	STACK(Func) functions;//can maybe realloc?
 } VM;
 
+
 int run_vm(VM* vm);
 
 #endif // VM_H
