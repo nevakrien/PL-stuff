@@ -3,33 +3,53 @@
 
 #include "ir.h"
 
-typedef struct BlockFrame {
-	count_t ip;
-	count_t bid;
-} BlockFrame;
-
-typedef struct FuncFrame {
-	count_t fid;
-	size_t block_stack_len;//used to reset to the right block
-}FuncFrame;
-
 typedef struct Handle {
 	Cell* data;
 	const Var* var;
 } Handle;
 
+static const ssize_t NO_EPI = -1;
+static const ssize_t FUNC_END = -2;
+
+typedef struct UnwindFrame {
+	Handle var;
+
+	size_t param_bottom;//what to set the param stack to in the end
+	ssize_t epi; //-1 means nothing
+} UnwindFrame;
+
+typedef struct FuncFrame {
+	const Func* func;
+	const Block* block;
+	const OP* op;
+}FuncFrame;
+
+typedef enum VM_RESULT{
+	VM_OK,
+	VM_CRASHED,
+	VM_OOM_FUNCS,
+	VM_OOM_UNWIND,
+	
+	VM_PARAM_UNDERFLOW,
+}VM_RESULT;
+
+
+
 typedef struct VM {
-	STACK(BlockFrame) block_stack;
+	STACK(UnwindFrame) unwind_stack;
 	STACK(FuncFrame) func_stack;
-	count_t unwind;//0 means running normally, -1 means return from function
 
 	STACK(Cell) storage;
-	STACK(Handle) param;
+	STACK(Handle) param_stack;
 
 	STACK(Func) functions;//can maybe realloc?
+
 } VM;
 
 
-int run_vm(VM* vm);
+
+
+VM_RESULT vm_run(VM* vm);
+VM_RESULT vm_call_func(VM* vm,const Func* func);
 
 #endif // VM_H

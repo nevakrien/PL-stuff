@@ -53,8 +53,9 @@ typedef union Cell {
 #define TOP(x) (x.data[x.len-1])
 
 typedef enum OP_KIND : uoffset_t {
+    OP_NULL,//goto terminator
+
     OP_CALL,
-    OP_NEST_BLOCK,
 
     OP_ASSIGN,
     OP_ADD_ASSIGN,
@@ -68,6 +69,7 @@ typedef enum OP_KIND : uoffset_t {
     OP_BIT_NOT_ASSIGN,
 
     OP_DROP,
+    OP_PICK,
 
     OP_PUSH_VAR,    
     OP_PUSH_ARG,
@@ -83,23 +85,37 @@ typedef struct OP {
 	uoffset_t extra;
 } OP;
 
-enum GOTO_UNIQUE : uoffset_t {
-    GOTO_CRASH=-1,
-    GOTO_RET=-2,
-};
 
 typedef enum TERM_KIND : uoffset_t {
-    TERM_GOTO,
+    TERM_SIMPLE,
     TERM_BRANCH,
+    TERM_RET,
+
+    TERM_RET_UNWIND,
+    TERM_UNWIND,
+    TERM_PUSH_UNWIND,
+    TERM_POP_UNWIND,
+
 } TERM_KIND;
 
 
 
 typedef struct Terminator {
 	TERM_KIND kind;
-	uoffset_t extra1;
-	uoffset_t extra2;
-    uoffset_t unest_level;//how many scope to unest, 0 is allowed (should be 0 if all sides are crash/ret)
+	union { 
+        struct {
+            offset_t tgt;
+        } simple;
+        struct {
+            offset_t yes;
+            offset_t no;
+        }branch;
+        struct {
+            offset_t tgt;
+            offset_t unwind;
+        } push_unwind;
+
+    } data;
 } Terminator;
 
 typedef struct Var {
@@ -116,9 +132,7 @@ typedef struct Sig {
 } Sig;
 
 typedef struct Block {    
-	OPS ops;
-	count_t body_start;
-	count_t body_end;
+	OPS ops;//null terminated
 
     Terminator term;
 
