@@ -41,8 +41,10 @@ typedef STACK(VmCode) VmFuncS;
 
 typedef struct CrashFrame {
 	const ByteCode* pc;
+	const ByteCode* base;
 	size_t storage_len;
 	size_t param_len;
+	size_t param_base;
 } CrashFrame;
 
 

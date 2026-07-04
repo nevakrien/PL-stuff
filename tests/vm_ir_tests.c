@@ -1457,6 +1457,143 @@ static void test_compiled_function_call(void) {
     vm_free_for_test(&vm);
 }
 
+static void test_callee_crash_unwinds_to_caller_pad(void) {
+    enum {
+        ARG_Y,
+        ARG_X,
+        ARG_MARK,
+        ARG_COUNT,
+    };
+
+    enum {
+        FUNC_CALLEE,
+        FUNC_COUNT,
+    };
+
+    enum {
+        CALLER_BLOCK_ROOT,
+        CALLER_BLOCK_BODY,
+        CALLER_BLOCK_PAD,
+        CALLER_BLOCK_COUNT,
+    };
+
+    enum {
+        CALLER_OP_PUSH_X,
+        CALLER_OP_CALL_CALLEE,
+        CALLER_OP_PUSH_Y,
+        CALLER_OP_PUSH_MARK,
+        CALLER_OP_ASSIGN_Y,
+        CALLER_OP_COUNT,
+    };
+
+    enum {
+        CALLEE_BLOCK_ROOT,
+        CALLEE_BLOCK_COUNT,
+    };
+
+    static Var callee_ins[] = {
+        [0] = {.tid = TYPE_INT_ID, .name = "x"},
+    };
+
+    static Var caller_ins[] = {
+        [0] = {.tid = TYPE_INT_ID, .name = "x"},
+        [1] = {.tid = TYPE_INT_ID, .name = "mark"},
+    };
+
+    static Var caller_outs[] = {
+        [0] = {.tid = TYPE_INT_ID, .name = "y"},
+    };
+
+    static Var caller_vars[] = {
+        [ARG_Y] = {.tid = TYPE_INT_ID, .name = "y"},
+        [ARG_X] = {.tid = TYPE_INT_ID, .name = "x"},
+        [ARG_MARK] = {.tid = TYPE_INT_ID, .name = "mark"},
+    };
+
+    static Block callee_blocks[] = {
+        [CALLEE_BLOCK_ROOT] = {.kind = BLOCK_CRASH},
+    };
+
+    static OP caller_ops[] = {
+        [CALLER_OP_PUSH_X] = {.kind = OP_PUSH_ARG, .extra = ARG_X},
+        [CALLER_OP_CALL_CALLEE] = {.kind = OP_CALL, .extra = FUNC_CALLEE},
+        [CALLER_OP_PUSH_Y] = {.kind = OP_PUSH_ARG, .extra = ARG_Y},
+        [CALLER_OP_PUSH_MARK] = {.kind = OP_PUSH_ARG, .extra = ARG_MARK},
+        [CALLER_OP_ASSIGN_Y] = {.kind = OP_ASSIGN, .extra = 0},
+    };
+
+    static Block caller_blocks[] = {
+        [CALLER_BLOCK_ROOT] = {
+            .kind = BLOCK_CRASH_PAD,
+            .data.crash_pad = {.body = CALLER_BLOCK_BODY, .pad = CALLER_BLOCK_PAD},
+        },
+        [CALLER_BLOCK_BODY] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = CALLER_OP_PUSH_X, .len = 2},
+        },
+        [CALLER_BLOCK_PAD] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = CALLER_OP_PUSH_Y, .len = 3},
+        },
+    };
+
+    Func funcs[] = {
+        [FUNC_CALLEE] = {
+            .name = "callee_crash",
+            .sig = {
+                .ins = {.data = callee_ins, .len = 1},
+                .outs = {.data = NULL, .len = 0},
+                .can_crash = true,
+            },
+            .types = test_type_slice(),
+            .blocks = {.data = callee_blocks, .len = CALLEE_BLOCK_COUNT},
+            .ops = {.data = NULL, .len = 0},
+            .vars = {.data = callee_ins, .len = 1},
+        },
+    };
+
+    Func caller = {
+        .name = "caller_pad_catches_callee_crash",
+        .sig = {
+            .ins = {.data = caller_ins, .len = 2},
+            .outs = {.data = caller_outs, .len = 1},
+            .can_crash = true,
+        },
+        .types = test_type_slice(),
+        .blocks = {.data = caller_blocks, .len = CALLER_BLOCK_COUNT},
+        .ops = {.data = caller_ops, .len = CALLER_OP_COUNT},
+        .vars = {.data = caller_vars, .len = ARG_COUNT},
+    };
+
+    CompileContext ctx = {
+        .funcs = {.data = funcs, .len = FUNC_COUNT, .cap = FUNC_COUNT},
+    };
+
+    VM vm;
+    vm_init_for_test(&vm, 1024, 16, 8);
+
+    num_t y = 0;
+    num_t x = 17;
+    num_t mark = 88;
+    push_param_or_die(&vm, &y);
+    push_param_or_die(&vm, &x);
+    push_param_or_die(&vm, &mark);
+
+    VmCode code = vm_compile_no_defers(&caller, &ctx);
+    assert(code.data);
+    assert(ctx.code.len == FUNC_COUNT);
+    assert(ctx.code.data[FUNC_CALLEE].data);
+    assert(vm_run(&vm, code.data) == VM_CRASH);
+
+    assert(y == mark);
+    assert(vm.param_stack.len == ARG_COUNT);
+
+    free(code.data);
+    for(size_t i=0;i<ctx.code.len;i++) free(ctx.code.data[i].data);
+    free(ctx.code.data);
+    vm_free_for_test(&vm);
+}
+
 static VM_RESULT native_assign_99(VM* vm) {
     if(vm->param_stack.len < 1) return VM_CRASH;
     num_t x = 99;
@@ -1585,6 +1722,9 @@ int main(void) {
 
     test_compiled_function_call();
     puts("ok: test_compiled_function_call");
+
+    test_callee_crash_unwinds_to_caller_pad();
+    puts("ok: test_callee_crash_unwinds_to_caller_pad");
 
     test_native_call_from_global();
     puts("ok: test_native_call_from_global");

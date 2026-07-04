@@ -810,7 +810,7 @@ static bool push_param(VM* vm,void* p){
 	return true;
 }
 
-static bool push_crash(VM* vm,const ByteCode* p){
+static bool push_crash(VM* vm,const ByteCode* p,const ByteCode* base,size_t param_base){
 	if(vm->crash_stack.len == vm->crash_stack.cap){
 		size_t cap = vm->crash_stack.cap ? vm->crash_stack.cap * 2 : 16;
 		CrashFrame* data = realloc(vm->crash_stack.data,cap * sizeof(*vm->crash_stack.data));
@@ -820,8 +820,10 @@ static bool push_crash(VM* vm,const ByteCode* p){
 	}
 	vm->crash_stack.data[vm->crash_stack.len++] = (CrashFrame){
 		.pc = p,
+		.base = base,
 		.storage_len = vm->storage.len,
 		.param_len = vm->param_stack.len,
+		.param_base = param_base,
 	};
 	return true;
 }
@@ -859,7 +861,7 @@ static bool storage_pop_return(VM* vm,ReturnFrame* ret){
 	return true;
 }
 
-static VM_RESULT vm_crash(VM* vm,const ByteCode** pc){
+static VM_RESULT vm_set_crash_frame(VM* vm,const ByteCode** pc,const ByteCode** base,size_t* param_base){
 	if(vm->crash_stack.len == 0) return VM_CRASH;
 	CrashFrame frame = TOP(vm->crash_stack);
 	vm->crash_stack.len--;
@@ -868,6 +870,8 @@ static VM_RESULT vm_crash(VM* vm,const ByteCode** pc){
 	vm->storage.len = frame.storage_len;
 	vm->param_stack.len = frame.param_len;
 	*pc = frame.pc;
+	*base = frame.base;
+	*param_base = frame.param_base;
 	return VM_OK;
 }
 
@@ -875,6 +879,7 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 	const ByteCode* base = code;
 	const ByteCode* pc = code;
 	size_t param_base = 0;
+	VM_RESULT ans = VM_OK;
 	if(!storage_push_return(vm,(ReturnFrame){0})) return VM_OOM_STORAGE;
 
 	for(;;){
@@ -895,7 +900,10 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 		case B_STORAGE_ADD: {
 			offset_t amount;
 			pc = read_offset(pc,&amount);
-			if(!storage_resize(vm,amount)) return VM_OOM_STORAGE;
+			if(!storage_resize(vm,amount)){
+				if(ans == VM_OK) ans = VM_OOM_STORAGE;
+				goto crash;
+			}
 			break;
 		}
 
@@ -904,7 +912,10 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			pc = read_offset(pc,&offset);
 			if(offset > 0) return VM_HARD_CRASH;
 			if(offset < 0 && (size_t)(-offset) > vm->storage.len) return VM_HARD_CRASH;
-			if(!push_param(vm,vm->storage.data + vm->storage.len + offset)) return VM_OOM_PARAM;
+			if(!push_param(vm,vm->storage.data + vm->storage.len + offset)){
+				if(ans == VM_OK) ans = VM_OOM_PARAM;
+				goto crash;
+			}
 			break;
 		}
 
@@ -912,7 +923,10 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			count_t idx;
 			pc = read_count(pc,&idx);
 			if(param_base + idx >= vm->param_stack.len) return VM_HARD_CRASH;
-			if(!push_param(vm,vm->param_stack.data[param_base + idx])) return VM_OOM_PARAM;
+			if(!push_param(vm,vm->param_stack.data[param_base + idx])){
+				if(ans == VM_OK) ans = VM_OOM_PARAM;
+				goto crash;
+			}
 			break;
 		}
 
@@ -920,7 +934,10 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			const void* ptr;
 			pc = read_pointer(pc,&ptr);
 			if(!ptr) return VM_HARD_CRASH;
-			if(!push_param(vm,(void*)ptr)) return VM_OOM_PARAM;
+			if(!push_param(vm,(void*)ptr)){
+				if(ans == VM_OK) ans = VM_OOM_PARAM;
+				goto crash;
+			}
 			break;
 		}
 
@@ -948,9 +965,8 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			count_t len;
 			memcpy(&len,arr,sizeof(len));
 			if(idx < 0 || (count_t)idx >= len || (count_t)idx >= capacity){
-				VM_RESULT r = vm_crash(vm,&pc);
-				if(r != VM_OK) return r;
-				break;
+				if(ans == VM_OK) ans = VM_CRASH;
+				goto crash;
 			}
 			TOP(vm->param_stack) = arr + data_offset + elem_size * (size_t)idx;
 			break;
@@ -988,9 +1004,8 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			else if(bop == B_MUL) lhs *= rhs;
 			else if(bop == B_DIV){
 				if(rhs == 0){
-					VM_RESULT r = vm_crash(vm,&pc);
-					if(r != VM_OK) return r;
-					break;
+					if(ans == VM_OK) ans = VM_CRASH;
+					goto crash;
 				}
 				lhs /= rhs;
 			}
@@ -1024,9 +1039,8 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			count_t len;
 			memcpy(&len,arr,sizeof(len));
 			if(len >= capacity){
-				VM_RESULT r = vm_crash(vm,&pc);
-				if(r != VM_OK) return r;
-				break;
+				if(ans == VM_OK) ans = VM_CRASH;
+				goto crash;
 			}
 			memmove(arr + data_offset + elem_size * len,elem,elem_size);
 			len++;
@@ -1040,9 +1054,8 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			count_t len;
 			memcpy(&len,arr,sizeof(len));
 			if(len == 0){
-				VM_RESULT r = vm_crash(vm,&pc);
-				if(r != VM_OK) return r;
-				break;
+				if(ans == VM_OK) ans = VM_CRASH;
+				goto crash;
 			}
 			len--;
 			memcpy(arr,&len,sizeof(len));
@@ -1074,7 +1087,10 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 		case B_PUSH_CRASH: {
 			uoffset_t target;
 			pc = read_uoffset(pc,&target);
-			if(!push_crash(vm,base + target)) return VM_OOM_CRASH;
+			if(!push_crash(vm,base + target,base,param_base)){
+				if(ans == VM_OK) ans = VM_OOM_CRASH;
+				goto crash;
+			}
 			break;
 		}
 
@@ -1084,11 +1100,8 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			break;
 
 		case B_CRASH:
-			{
-				VM_RESULT r = vm_crash(vm,&pc);
-				if(r != VM_OK) return r;
-			}
-			break;
+			if(ans == VM_OK) ans = VM_CRASH;
+			goto crash;
 
 		case B_HARD_CRASH:
 			return VM_HARD_CRASH;
@@ -1100,7 +1113,10 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			pc = read_count(pc,&argc);
 			if(!target) return VM_HARD_CRASH;
 			if(vm->param_stack.len < argc) return VM_HARD_CRASH;
-			if(!storage_push_return(vm,(ReturnFrame){.pc=pc,.base=base,.param_base=param_base})) return VM_OOM_STORAGE;
+			if(!storage_push_return(vm,(ReturnFrame){.pc=pc,.base=base,.param_base=param_base})){
+				if(ans == VM_OK) ans = VM_OOM_STORAGE;
+				goto crash;
+			}
 			base = target;
 			pc = target;
 			param_base = vm->param_stack.len - argc;
@@ -1114,13 +1130,29 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			vm->param_stack.len--;
 			if(!fn) return VM_HARD_CRASH;
 			VM_RESULT r = fn(vm);
-			if(r == VM_CRASH) r = vm_crash(vm,&pc);
+			if(r == VM_CRASH){
+				if(ans == VM_OK) ans = r;
+				goto crash;
+			}
+			if(r != VM_OK && r != VM_HARD_CRASH){
+				if(ans == VM_OK) ans = r;
+				goto crash;
+			}
 			if(r != VM_OK) return r;
 			break;
 		}
 
 		default:
 			return VM_HARD_CRASH;
+		}
+		continue;
+
+crash:
+		for(;;){
+			VM_RESULT r = vm_set_crash_frame(vm,&pc,&base,&param_base);
+			if(r == VM_OK) break;
+			if(ans == VM_OK) ans = r;
+			if(vm->crash_stack.len == 0) return ans;
 		}
 	}
 }
