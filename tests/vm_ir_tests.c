@@ -83,6 +83,17 @@ static void run_func_or_die(Func* func, VM* vm) {
     free(code.data);
 }
 
+static void run_func_expect(Func* func, VM* vm, VM_RESULT expected) {
+    VmCode code = vm_compile_no_defers(func);
+    assert(code.data);
+    assert(code.len > 0);
+
+    VM_RESULT result = vm_run(vm, code.data);
+    assert(result == expected);
+
+    free(code.data);
+}
+
 /*
     Assumption used by these tests:
 
@@ -201,6 +212,7 @@ static void test_basic_external_assign(void) {
     run_func_or_die(&func, &vm);
 
     assert(y == 123);
+    assert(vm.param_stack.len == ARG_COUNT);
 
     vm_free_for_test(&vm);
 }
@@ -353,11 +365,12 @@ static void test_crash_pad_writes_y1_but_not_y2_after_crash(void) {
     push_param_or_die(&vm, &y1);
     push_param_or_die(&vm, &y2);
 
-    run_func_or_die(&func, &vm);
+    run_func_expect(&func, &vm, VM_CRASH);
 
     assert(y1 == 1);
     assert(y2 == 0);
     assert(y2 != 2);
+    assert(vm.param_stack.len == ARG_COUNT);
 
     vm_free_for_test(&vm);
 }
@@ -497,6 +510,7 @@ static void test_crash_pad_body_runs_normally_without_crash(void) {
 
     assert(y1 == 0);
     assert(y2 == 2);
+    assert(vm.param_stack.len == ARG_COUNT);
 
     vm_free_for_test(&vm);
 }
@@ -720,6 +734,7 @@ static void test_array_push_at_and_drop(void) {
     assert(y1 == 22);
     assert(len == 1);
     assert(first == 11);
+    assert(vm.param_stack.len == ARG_COUNT);
 
     vm_free_for_test(&vm);
 }

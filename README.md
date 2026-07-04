@@ -22,7 +22,8 @@ The second part would run regardless of breaks/crashes
 ## Crash (hard/soft)
 a hard crash simply exists the program. 
 a soft crash runs all pending defers and then exits the program.
-if subsequnt defers (including on every calling function) fail we try runing them upto an implementation defined MAX_CRASH and then hard crash. not some platforms may choose to set that to 0 meaning that all crashes are hard crashes. This allows removing crash pads.
+if subsequnt defers (including on every calling function) fail we try runing them.
+
 
 ## Crash Pad
 runs a body and then on fail runs the crash pad and recrashes. This is intended to be mostly internal. we transform defers into normal control flow and crash pads.

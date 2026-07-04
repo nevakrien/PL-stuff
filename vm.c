@@ -379,9 +379,19 @@ static bool compile_op(Compiler* c,OP op){
 }
 
 static CompileResult compile_basic(Compiler* c,Block b){
+	size_t start_params = c->params.len;
 	for(count_t i=0;i<b.data.basic.len;i++){
 		if(!compile_op(c,c->func->ops.data[b.data.basic.start + i])) return COMPILE_FAIL;
 	}
+
+	if(c->params.len < start_params) return COMPILE_FAIL;
+	count_t extra = (count_t)(c->params.len - start_params);
+	if(extra){
+		if(!emit_op(&c->code,B_DROP_N)) return COMPILE_FAIL;
+		if(!emit_count(&c->code,extra)) return COMPILE_FAIL;
+		if(!pop_types(&c->params,extra)) return COMPILE_FAIL;
+	}
+
 	return COMPILE_REACHABLE;
 }
 
@@ -601,7 +611,6 @@ fail:
 static CompileResult compile_crash_pad(Compiler* c,Block b){
 	CompilerState before = {0};
 	CompilerState body_state = {0};
-	CompilerState pad_state = {0};
 	size_t end_patch = (size_t)-1;
 
 	if(!state_save(c,&before)) return COMPILE_FAIL;
@@ -626,44 +635,27 @@ static CompileResult compile_crash_pad(Compiler* c,Block b){
 
 	CompileResult pad_r = compile_block(c,b.data.crash_pad.pad);
 	if(pad_r == COMPILE_FAIL) goto fail;
-	if(pad_r == COMPILE_REACHABLE && !state_save(c,&pad_state)) goto fail;
+	if(pad_r == COMPILE_REACHABLE){
+		if(!emit_op(&c->code,B_CRASH)) goto fail;
+		pad_r = COMPILE_UNREACHABLE;
+	}
 
 	if(end_patch != (size_t)-1 && !patch_uoffset(&c->code,end_patch,c->code.len)) goto fail;
-
-	if(body_r == COMPILE_REACHABLE && pad_r == COMPILE_REACHABLE){
-		if(!state_restore(c,&body_state)) goto fail;
-		if(!state_equal(c,&pad_state)) goto fail;
-		state_free(&before);
-		state_free(&body_state);
-		state_free(&pad_state);
-		return COMPILE_REACHABLE;
-	}
 
 	if(body_r == COMPILE_REACHABLE){
 		if(!state_restore(c,&body_state)) goto fail;
 		state_free(&before);
 		state_free(&body_state);
-		state_free(&pad_state);
-		return COMPILE_REACHABLE;
-	}
-
-	if(pad_r == COMPILE_REACHABLE){
-		if(!state_restore(c,&pad_state)) goto fail;
-		state_free(&before);
-		state_free(&body_state);
-		state_free(&pad_state);
 		return COMPILE_REACHABLE;
 	}
 
 	state_free(&before);
 	state_free(&body_state);
-	state_free(&pad_state);
 	return COMPILE_UNREACHABLE;
 
 fail:
 	state_free(&before);
 	state_free(&body_state);
-	state_free(&pad_state);
 	return COMPILE_FAIL;
 }
 

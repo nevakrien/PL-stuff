@@ -17,6 +17,7 @@
 
 #ifndef COUNT_TYPE
 #define COUNT_TYPE unsigned int
+#define SCOUNT_TYPE int
 #endif
 
 #ifndef LIFE_TYPE
@@ -28,6 +29,7 @@ typedef NUMERIC_TYPE num_t;
 typedef OFFSET_TYPE offset_t;
 typedef OFFSET_UNSIGNED_TYPE uoffset_t;
 typedef COUNT_TYPE count_t;
+typedef SCOUNT_TYPE scount_t;
 typedef LIFE_TYPE life_t;
 
 typedef count_t var_idx;
