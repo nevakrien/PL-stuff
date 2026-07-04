@@ -47,7 +47,10 @@ typedef union Cell {
 	num_t num;
 } Cell;
 
-static const size_t CELL_ALIGN = alignof(Cell);
+#ifndef CELL_ALIGN
+#include <stdalign.h>
+#define CELL_ALIGN alignof(Cell)
+#endif
 
 #define STACK(T) struct { \
     T *data;            \
