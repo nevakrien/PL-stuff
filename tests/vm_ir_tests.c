@@ -582,6 +582,218 @@ static void test_uncaught_crash_returns_vm_crash(void) {
     free(code.data);
 }
 
+static void test_hard_crash_returns_vm_hard_crash(void) {
+    enum {
+        BLOCK_ROOT,
+        BLOCK_COUNT,
+    };
+
+    static Block blocks[] = {
+        [BLOCK_ROOT] = {
+            .kind = BLOCK_HARD_CRASH,
+        },
+    };
+
+    Func func = {
+        .name = "test_hard_crash_returns_vm_hard_crash",
+        .sig = {
+            .ins = {.data = NULL, .len = 0},
+            .outs = {.data = NULL, .len = 0},
+            .can_crash = true,
+        },
+        .types = test_type_slice(),
+        .blocks = {.data = blocks, .len = BLOCK_COUNT},
+        .ops = {.data = NULL, .len = 0},
+        .vars = {.data = NULL, .len = 0},
+    };
+
+    VM vm;
+    vm_init_for_test(&vm, 1024, 8, 8);
+
+    run_func_expect(&func, &vm, VM_HARD_CRASH);
+
+    vm_free_for_test(&vm);
+}
+
+static void test_array_crashes_unwind_stack(void) {
+    enum {
+        ARG_Y,
+        ARG_ARR,
+        ARG_IDX,
+        ARG_MARK,
+        ARG_COUNT,
+    };
+
+    enum {
+        BOUNDS_BLOCK_ROOT,
+        BOUNDS_BLOCK_BODY,
+        BOUNDS_BLOCK_PAD,
+        BOUNDS_BLOCK_COUNT,
+    };
+
+    enum {
+        BOUNDS_OP_PUSH_ARR,
+        BOUNDS_OP_PUSH_IDX,
+        BOUNDS_OP_AT,
+        BOUNDS_OP_PUSH_Y,
+        BOUNDS_OP_PUSH_MARK,
+        BOUNDS_OP_ASSIGN_Y,
+        BOUNDS_OP_COUNT,
+    };
+
+    static Var ins[] = {
+        [ARG_ARR]  = {.tid = TYPE_INT_ARRAY4_ID, .name = "arr"},
+        [ARG_IDX]  = {.tid = TYPE_INT_ID,        .name = "idx"},
+        [ARG_MARK] = {.tid = TYPE_INT_ID,        .name = "mark"},
+    };
+
+    static Var outs[] = {
+        {.tid = TYPE_INT_ID, .name = "y"},
+    };
+
+    static Var vars[] = {
+        [ARG_Y]    = {.tid = TYPE_INT_ID,        .name = "y"},
+        [ARG_ARR]  = {.tid = TYPE_INT_ARRAY4_ID, .name = "arr"},
+        [ARG_IDX]  = {.tid = TYPE_INT_ID,        .name = "idx"},
+        [ARG_MARK] = {.tid = TYPE_INT_ID,        .name = "mark"},
+    };
+
+    static OP bounds_ops[] = {
+        [BOUNDS_OP_PUSH_ARR]  = {.kind = OP_PUSH_ARG, .extra = ARG_ARR},
+        [BOUNDS_OP_PUSH_IDX]  = {.kind = OP_PUSH_ARG, .extra = ARG_IDX},
+        [BOUNDS_OP_AT]        = {.kind = OP_ARR_AT,   .extra = 0},
+        [BOUNDS_OP_PUSH_Y]    = {.kind = OP_PUSH_ARG, .extra = ARG_Y},
+        [BOUNDS_OP_PUSH_MARK] = {.kind = OP_PUSH_ARG, .extra = ARG_MARK},
+        [BOUNDS_OP_ASSIGN_Y]  = {.kind = OP_ASSIGN,   .extra = 0},
+    };
+
+    static Block bounds_blocks[] = {
+        [BOUNDS_BLOCK_ROOT] = {
+            .kind = BLOCK_CRASH_PAD,
+            .data.crash_pad = {.body = BOUNDS_BLOCK_BODY, .pad = BOUNDS_BLOCK_PAD},
+        },
+        [BOUNDS_BLOCK_BODY] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = BOUNDS_OP_PUSH_ARR, .len = 3},
+        },
+        [BOUNDS_BLOCK_PAD] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = BOUNDS_OP_PUSH_Y, .len = 3},
+        },
+    };
+
+    Func bounds_func = {
+        .name = "test_array_bad_bounds_unwinds_stack",
+        .sig = {
+            .ins = {.data = ins, .len = 3},
+            .outs = {.data = outs, .len = 1},
+            .can_crash = true,
+        },
+        .types = test_type_slice(),
+        .blocks = {.data = bounds_blocks, .len = BOUNDS_BLOCK_COUNT},
+        .ops = {.data = bounds_ops, .len = BOUNDS_OP_COUNT},
+        .vars = {.data = vars, .len = ARG_COUNT},
+    };
+
+    VM bounds_vm;
+    vm_init_for_test(&bounds_vm, 1024, 16, 8);
+
+    alignas(Cell) unsigned char bounds_arr[128] = {0};
+    num_t bounds_y = 0;
+    num_t bad_idx = 0;
+    num_t mark = 77;
+
+    push_param_or_die(&bounds_vm, &bounds_y);
+    push_param_or_die(&bounds_vm, bounds_arr);
+    push_param_or_die(&bounds_vm, &bad_idx);
+    push_param_or_die(&bounds_vm, &mark);
+
+    run_func_expect(&bounds_func, &bounds_vm, VM_CRASH);
+
+    assert(bounds_y == 77);
+    assert(bounds_vm.param_stack.len == ARG_COUNT);
+
+    vm_free_for_test(&bounds_vm);
+
+    enum {
+        CAP_BLOCK_ROOT,
+        CAP_BLOCK_BODY,
+        CAP_BLOCK_PAD,
+        CAP_BLOCK_COUNT,
+    };
+
+    enum {
+        CAP_OP_PUSH_ARR,
+        CAP_OP_PUSH_MARK_FOR_ARR,
+        CAP_OP_ARR_PUSH,
+        CAP_OP_PUSH_Y,
+        CAP_OP_PUSH_MARK,
+        CAP_OP_ASSIGN_Y,
+        CAP_OP_COUNT,
+    };
+
+    static OP cap_ops[] = {
+        [CAP_OP_PUSH_ARR]          = {.kind = OP_PUSH_ARG, .extra = ARG_ARR},
+        [CAP_OP_PUSH_MARK_FOR_ARR] = {.kind = OP_PUSH_ARG, .extra = ARG_MARK},
+        [CAP_OP_ARR_PUSH]          = {.kind = OP_ARR_PUSH, .extra = 0},
+        [CAP_OP_PUSH_Y]            = {.kind = OP_PUSH_ARG, .extra = ARG_Y},
+        [CAP_OP_PUSH_MARK]         = {.kind = OP_PUSH_ARG, .extra = ARG_MARK},
+        [CAP_OP_ASSIGN_Y]          = {.kind = OP_ASSIGN,   .extra = 0},
+    };
+
+    static Block cap_blocks[] = {
+        [CAP_BLOCK_ROOT] = {
+            .kind = BLOCK_CRASH_PAD,
+            .data.crash_pad = {.body = CAP_BLOCK_BODY, .pad = CAP_BLOCK_PAD},
+        },
+        [CAP_BLOCK_BODY] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = CAP_OP_PUSH_ARR, .len = 3},
+        },
+        [CAP_BLOCK_PAD] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = CAP_OP_PUSH_Y, .len = 3},
+        },
+    };
+
+    Func cap_func = {
+        .name = "test_array_out_of_capacity_unwinds_stack",
+        .sig = {
+            .ins = {.data = ins, .len = 3},
+            .outs = {.data = outs, .len = 1},
+            .can_crash = true,
+        },
+        .types = test_type_slice(),
+        .blocks = {.data = cap_blocks, .len = CAP_BLOCK_COUNT},
+        .ops = {.data = cap_ops, .len = CAP_OP_COUNT},
+        .vars = {.data = vars, .len = ARG_COUNT},
+    };
+
+    VM cap_vm;
+    vm_init_for_test(&cap_vm, 1024, 16, 8);
+
+    alignas(Cell) unsigned char cap_arr[128] = {0};
+    count_t len = test_types[TYPE_INT_ARRAY4_ID].data.array.capacity;
+    memcpy(cap_arr, &len, sizeof(len));
+
+    num_t cap_y = 0;
+
+    push_param_or_die(&cap_vm, &cap_y);
+    push_param_or_die(&cap_vm, cap_arr);
+    push_param_or_die(&cap_vm, &bad_idx);
+    push_param_or_die(&cap_vm, &mark);
+
+    run_func_expect(&cap_func, &cap_vm, VM_CRASH);
+
+    count_t actual_len;
+    memcpy(&actual_len, cap_arr, sizeof(actual_len));
+    assert(cap_y == 77);
+    assert(actual_len == test_types[TYPE_INT_ARRAY4_ID].data.array.capacity);
+    assert(cap_vm.param_stack.len == ARG_COUNT);
+
+    vm_free_for_test(&cap_vm);
+}
+
 static void test_push_param_oom(void) {
     VM vm;
     vm_init_for_test(&vm, 1024, 1, 8);
@@ -1352,6 +1564,12 @@ int main(void) {
 
     test_uncaught_crash_returns_vm_crash();
     puts("ok: test_uncaught_crash_returns_vm_crash");
+
+    test_hard_crash_returns_vm_hard_crash();
+    puts("ok: test_hard_crash_returns_vm_hard_crash");
+
+    test_array_crashes_unwind_stack();
+    puts("ok: test_array_crashes_unwind_stack");
 
     test_array_push_at_and_drop();
     puts("ok: test_array_push_at_and_drop");

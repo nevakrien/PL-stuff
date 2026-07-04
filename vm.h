@@ -55,6 +55,7 @@ typedef struct VM {
 typedef enum VM_RESULT {
 	VM_OK,
 	VM_CRASH,
+	VM_HARD_CRASH,
 	VM_OOM_PARAM,
 	VM_OOM_STORAGE,
 	VM_OOM_CRASH,

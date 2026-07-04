@@ -6,15 +6,15 @@
 typedef enum ParType : count_t{
 	PAR_LOCAL,
 	PAR_ARG,
+	PAR_GLOBAL,
 } ParType;
 
-typedef struct Handle {
+typedef struct Par {
 	count_t idx;
 	ParType loc;
-} Handle;
+} Par;
 
-typedef STACK(Handle) VirtualStack;
-
+typedef STACK(Par) VirtualStack;
 
 #endif // FRONT_END_H
 
