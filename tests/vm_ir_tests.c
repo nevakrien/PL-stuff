@@ -121,8 +121,8 @@ static void run_func_expect(Func* func, VM* vm, VM_RESULT expected) {
 
 static void test_basic_external_assign(void) {
     enum {
-        ARG_X,
         ARG_Y,
+        ARG_X,
         ARG_COUNT,
     };
 
@@ -206,23 +206,23 @@ static void test_basic_external_assign(void) {
     num_t x = 123;
     num_t y = 0;
 
-    push_param_or_die(&vm, &x);
     push_param_or_die(&vm, &y);
+    push_param_or_die(&vm, &x);
 
     run_func_or_die(&func, &vm);
 
     assert(y == 123);
-    assert(vm.param_stack.len == ARG_COUNT);
+    assert(vm.param_stack.len == 1);
 
     vm_free_for_test(&vm);
 }
 
 static void test_crash_pad_writes_y1_but_not_y2_after_crash(void) {
     enum {
-        ARG_ONE,
-        ARG_TWO,
         ARG_Y1,
         ARG_Y2,
+        ARG_ONE,
+        ARG_TWO,
         ARG_COUNT,
     };
 
@@ -360,10 +360,10 @@ static void test_crash_pad_writes_y1_but_not_y2_after_crash(void) {
     num_t y1 = 0;
     num_t y2 = 0;
 
-    push_param_or_die(&vm, &one);
-    push_param_or_die(&vm, &two);
     push_param_or_die(&vm, &y1);
     push_param_or_die(&vm, &y2);
+    push_param_or_die(&vm, &one);
+    push_param_or_die(&vm, &two);
 
     run_func_expect(&func, &vm, VM_CRASH);
 
@@ -377,10 +377,10 @@ static void test_crash_pad_writes_y1_but_not_y2_after_crash(void) {
 
 static void test_crash_pad_body_runs_normally_without_crash(void) {
     enum {
-        ARG_ONE,
-        ARG_TWO,
         ARG_Y1,
         ARG_Y2,
+        ARG_ONE,
+        ARG_TWO,
         ARG_COUNT,
     };
 
@@ -501,16 +501,16 @@ static void test_crash_pad_body_runs_normally_without_crash(void) {
     num_t y1 = 0;
     num_t y2 = 0;
 
-    push_param_or_die(&vm, &one);
-    push_param_or_die(&vm, &two);
     push_param_or_die(&vm, &y1);
     push_param_or_die(&vm, &y2);
+    push_param_or_die(&vm, &one);
+    push_param_or_die(&vm, &two);
 
     run_func_or_die(&func, &vm);
 
     assert(y1 == 0);
     assert(y2 == 2);
-    assert(vm.param_stack.len == ARG_COUNT);
+    assert(vm.param_stack.len == 2);
 
     vm_free_for_test(&vm);
 }
@@ -589,13 +589,13 @@ static void test_push_param_oom(void) {
 
 static void test_array_push_at_and_drop(void) {
     enum {
+        ARG_Y0,
+        ARG_Y1,
         ARG_ARR,
         ARG_ONE,
         ARG_TWO,
         ARG_IDX0,
         ARG_IDX1,
-        ARG_Y0,
-        ARG_Y1,
         ARG_COUNT,
     };
 
@@ -713,13 +713,13 @@ static void test_array_push_at_and_drop(void) {
     num_t y0 = 0;
     num_t y1 = 0;
 
+    push_param_or_die(&vm, &y0);
+    push_param_or_die(&vm, &y1);
     push_param_or_die(&vm, arr);
     push_param_or_die(&vm, &one);
     push_param_or_die(&vm, &two);
     push_param_or_die(&vm, &idx0);
     push_param_or_die(&vm, &idx1);
-    push_param_or_die(&vm, &y0);
-    push_param_or_die(&vm, &y1);
 
     run_func_or_die(&func, &vm);
 
@@ -734,18 +734,18 @@ static void test_array_push_at_and_drop(void) {
     assert(y1 == 22);
     assert(len == 1);
     assert(first == 11);
-    assert(vm.param_stack.len == ARG_COUNT);
+    assert(vm.param_stack.len == 2);
 
     vm_free_for_test(&vm);
 }
 
 static void test_loop_break_skips_unreachable_body_tail(void) {
     enum {
+        ARG_Y,
+        ARG_AFTER,
         ARG_ONE,
         ARG_TWO,
         ARG_BAD,
-        ARG_Y,
-        ARG_AFTER,
         VAR_COND,
         ARG_COUNT,
     };
@@ -882,11 +882,11 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
     num_t y = 0;
     num_t after = 0;
 
+    push_param_or_die(&vm, &y);
+    push_param_or_die(&vm, &after);
     push_param_or_die(&vm, &one);
     push_param_or_die(&vm, &two);
     push_param_or_die(&vm, &bad);
-    push_param_or_die(&vm, &y);
-    push_param_or_die(&vm, &after);
 
     run_func_or_die(&func, &vm);
 
@@ -898,11 +898,11 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
 
 static void test_nested_many_break_skips_outer_tail(void) {
     enum {
+        ARG_Y,
         ARG_ONE,
         ARG_TWO,
         ARG_THREE,
         ARG_BAD,
-        ARG_Y,
         ARG_COUNT,
     };
 
@@ -1032,11 +1032,11 @@ static void test_nested_many_break_skips_outer_tail(void) {
     num_t bad = 99;
     num_t y = 0;
 
+    push_param_or_die(&vm, &y);
     push_param_or_die(&vm, &one);
     push_param_or_die(&vm, &two);
     push_param_or_die(&vm, &three);
     push_param_or_die(&vm, &bad);
-    push_param_or_die(&vm, &y);
 
     run_func_or_die(&func, &vm);
 

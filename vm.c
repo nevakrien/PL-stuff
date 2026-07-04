@@ -701,7 +701,12 @@ VmCode vm_compile_no_defers(const Func* func){
 	for(var_idx i=0;i<func->vars.len;i++) c.vars[i].tid = func->vars.data[i].tid;
 
 	CompileResult r = compile_block(&c,0);
-	bool ok = r != COMPILE_FAIL && emit_op(&c.code,B_RET);
+	bool ok = r != COMPILE_FAIL;
+	if(ok && func->sig.ins.len > (count_t)-1) ok = false;
+	if(ok && func->sig.ins.len){
+		ok = emit_op(&c.code,B_DROP_N) && emit_count(&c.code,(count_t)func->sig.ins.len);
+	}
+	if(ok) ok = emit_op(&c.code,B_RET);
 
 	for(size_t i=0;i<c.scopes.len;i++) free(c.scopes.data[i].patches.data);
 	free(c.scopes.data);
