@@ -341,7 +341,7 @@ static bool compile_func_call(Compiler* c,count_t idx){
 		if(c->params.data[start + i] != func->sig.outs.data[i].tid) return false;
 	}
 	for(size_t i=0;i<func->sig.ins.len;i++){
-		if(c->params.data[start + func->sig.outs.len + i] != func->sig.ins.data[i].tid) return false;
+		if(c->params.data[start + func->sig.outs.len + i] != func->sig.ins.data[i].var.tid) return false;
 	}
 
 	if(!emit_op(&c->code,B_CALL)) return false;
@@ -862,11 +862,11 @@ static bool storage_pop_return(VM* vm,ReturnFrame* ret){
 }
 
 static VM_RESULT vm_set_crash_frame(VM* vm,const ByteCode** pc,const ByteCode** base,size_t* param_base){
-	if(vm->crash_stack.len == 0) return VM_CRASH;
+	if(vm->crash_stack.len == 0) return VM_CRASH_UNDERFLOW;
 	CrashFrame frame = TOP(vm->crash_stack);
 	vm->crash_stack.len--;
-	if(frame.storage_len > vm->storage.len) return VM_HARD_CRASH;
-	if(frame.param_len > vm->param_stack.len) return VM_HARD_CRASH;
+	if(frame.storage_len > vm->storage.len) return VM_BAD_CRASH_FRAME;
+	if(frame.param_len > vm->param_stack.len) return VM_BAD_CRASH_FRAME;
 	vm->storage.len = frame.storage_len;
 	vm->param_stack.len = frame.param_len;
 	*pc = frame.pc;
@@ -889,7 +889,7 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 
 		case B_RET: {
 			ReturnFrame ret = {0};
-			if(!storage_pop_return(vm,&ret)) return VM_OK;
+			if(!storage_pop_return(vm,&ret)) return VM_STORAGE_UNDERFLOW;
 			if(!ret.pc) return VM_OK;
 			pc = ret.pc;
 			base = ret.base;
@@ -901,7 +901,7 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			offset_t amount;
 			pc = read_offset(pc,&amount);
 			if(!storage_resize(vm,amount)){
-				if(ans == VM_OK) ans = VM_OOM_STORAGE;
+				if(ans == VM_OK) ans = amount < 0 ? VM_STORAGE_UNDERFLOW : VM_OOM_STORAGE;
 				goto crash;
 			}
 			break;
@@ -910,8 +910,8 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 		case B_PUSH_VAR: {
 			offset_t offset;
 			pc = read_offset(pc,&offset);
-			if(offset > 0) return VM_HARD_CRASH;
-			if(offset < 0 && (size_t)(-offset) > vm->storage.len) return VM_HARD_CRASH;
+			if(offset > 0) return VM_INVALID_STORAGE_OFFSET;
+			if(offset < 0 && (size_t)(-offset) > vm->storage.len) return VM_INVALID_STORAGE_OFFSET;
 			if(!push_param(vm,vm->storage.data + vm->storage.len + offset)){
 				if(ans == VM_OK) ans = VM_OOM_PARAM;
 				goto crash;
@@ -922,7 +922,7 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 		case B_PUSH_ARG: {
 			count_t idx;
 			pc = read_count(pc,&idx);
-			if(param_base + idx >= vm->param_stack.len) return VM_HARD_CRASH;
+			if(param_base + idx >= vm->param_stack.len) return VM_INVALID_ARG;
 			if(!push_param(vm,vm->param_stack.data[param_base + idx])){
 				if(ans == VM_OK) ans = VM_OOM_PARAM;
 				goto crash;
@@ -933,7 +933,7 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 		case B_PUSH_GLOBAL: {
 			const void* ptr;
 			pc = read_pointer(pc,&ptr);
-			if(!ptr) return VM_HARD_CRASH;
+			if(!ptr) return VM_NULL_GLOBAL;
 			if(!push_param(vm,(void*)ptr)){
 				if(ans == VM_OK) ans = VM_OOM_PARAM;
 				goto crash;
@@ -944,7 +944,7 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 		case B_DROP_N: {
 			count_t n;
 			pc = read_count(pc,&n);
-			if(vm->param_stack.len < n) return VM_HARD_CRASH;
+			if(vm->param_stack.len < n) return VM_PARAM_UNDERFLOW;
 			vm->param_stack.len -= n;
 			break;
 		}
@@ -955,7 +955,7 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			pc = read_size(pc,&data_offset);
 			pc = read_size(pc,&elem_size);
 			pc = read_count(pc,&capacity);
-			if(vm->param_stack.len < 2) return VM_HARD_CRASH;
+			if(vm->param_stack.len < 2) return VM_PARAM_UNDERFLOW;
 
 			num_t idx;
 			memcpy(&idx,TOP(vm->param_stack),sizeof(idx));
@@ -965,7 +965,7 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			count_t len;
 			memcpy(&len,arr,sizeof(len));
 			if(idx < 0 || (count_t)idx >= len || (count_t)idx >= capacity){
-				if(ans == VM_OK) ans = VM_CRASH;
+				if(ans == VM_OK) ans = VM_ARRAY_BOUNDS;
 				goto crash;
 			}
 			TOP(vm->param_stack) = arr + data_offset + elem_size * (size_t)idx;
@@ -975,7 +975,7 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 		case B_COPY: {
 			size_t size;
 			pc = read_size(pc,&size);
-			if(vm->param_stack.len < 2) return VM_HARD_CRASH;
+			if(vm->param_stack.len < 2) return VM_PARAM_UNDERFLOW;
 			void* src = TOP(vm->param_stack);
 			vm->param_stack.len--;
 			memmove(TOP(vm->param_stack),src,size);
@@ -989,7 +989,7 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 		case B_AND:
 		case B_OR:
 		case B_XOR: {
-			if(vm->param_stack.len < 2) return VM_HARD_CRASH;
+			if(vm->param_stack.len < 2) return VM_PARAM_UNDERFLOW;
 
 			num_t rhs;
 			memcpy(&rhs,TOP(vm->param_stack),sizeof(rhs));
@@ -1004,7 +1004,7 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			else if(bop == B_MUL) lhs *= rhs;
 			else if(bop == B_DIV){
 				if(rhs == 0){
-					if(ans == VM_OK) ans = VM_CRASH;
+					if(ans == VM_OK) ans = VM_DIV_BY_ZERO;
 					goto crash;
 				}
 				lhs /= rhs;
@@ -1018,7 +1018,7 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 		}
 
 		case B_BIT_NOT: {
-			if(vm->param_stack.len < 1) return VM_HARD_CRASH;
+			if(vm->param_stack.len < 1) return VM_PARAM_UNDERFLOW;
 			num_t x;
 			memcpy(&x,TOP(vm->param_stack),sizeof(x));
 			x = ~x;
@@ -1032,14 +1032,14 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			pc = read_size(pc,&data_offset);
 			pc = read_size(pc,&elem_size);
 			pc = read_count(pc,&capacity);
-			if(vm->param_stack.len < 2) return VM_HARD_CRASH;
+			if(vm->param_stack.len < 2) return VM_PARAM_UNDERFLOW;
 			void* elem = TOP(vm->param_stack);
 			vm->param_stack.len--;
 			char* arr = TOP(vm->param_stack);
 			count_t len;
 			memcpy(&len,arr,sizeof(len));
 			if(len >= capacity){
-				if(ans == VM_OK) ans = VM_CRASH;
+				if(ans == VM_OK) ans = VM_ARRAY_CAPACITY;
 				goto crash;
 			}
 			memmove(arr + data_offset + elem_size * len,elem,elem_size);
@@ -1049,12 +1049,12 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 		}
 
 		case B_ARR_DROP: {
-			if(vm->param_stack.len < 1) return VM_HARD_CRASH;
+			if(vm->param_stack.len < 1) return VM_PARAM_UNDERFLOW;
 			char* arr = TOP(vm->param_stack);
 			count_t len;
 			memcpy(&len,arr,sizeof(len));
 			if(len == 0){
-				if(ans == VM_OK) ans = VM_CRASH;
+				if(ans == VM_OK) ans = VM_ARRAY_UNDERFLOW;
 				goto crash;
 			}
 			len--;
@@ -1075,8 +1075,8 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			pc = read_offset(pc,&cond_offset);
 			pc = read_uoffset(pc,&yes);
 			pc = read_uoffset(pc,&no);
-			if(cond_offset > 0) return VM_HARD_CRASH;
-			if(cond_offset < 0 && (size_t)(-cond_offset) > vm->storage.len) return VM_HARD_CRASH;
+			if(cond_offset > 0) return VM_INVALID_STORAGE_OFFSET;
+			if(cond_offset < 0 && (size_t)(-cond_offset) > vm->storage.len) return VM_INVALID_STORAGE_OFFSET;
 
 			num_t cond;
 			memcpy(&cond,vm->storage.data + vm->storage.len + cond_offset,sizeof(cond));
@@ -1095,7 +1095,7 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 		}
 
 		case B_POP_CRASH:
-			if(vm->crash_stack.len == 0) return VM_HARD_CRASH;
+			if(vm->crash_stack.len == 0) return VM_CRASH_UNDERFLOW;
 			vm->crash_stack.len--;
 			break;
 
@@ -1111,8 +1111,8 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			count_t argc;
 			pc = read_pointer(pc,&target);
 			pc = read_count(pc,&argc);
-			if(!target) return VM_HARD_CRASH;
-			if(vm->param_stack.len < argc) return VM_HARD_CRASH;
+			if(!target) return VM_NULL_CALL_TARGET;
+			if(vm->param_stack.len < argc) return VM_PARAM_UNDERFLOW;
 			if(!storage_push_return(vm,(ReturnFrame){.pc=pc,.base=base,.param_base=param_base})){
 				if(ans == VM_OK) ans = VM_OOM_STORAGE;
 				goto crash;
@@ -1124,11 +1124,11 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 		}
 
 		case B_CALL_NATIVE: {
-			if(vm->param_stack.len < 1) return VM_HARD_CRASH;
+			if(vm->param_stack.len < 1) return VM_PARAM_UNDERFLOW;
 			VmNativeFunc fn = NULL;
 			memcpy(&fn,TOP(vm->param_stack),sizeof(fn));
 			vm->param_stack.len--;
-			if(!fn) return VM_HARD_CRASH;
+			if(!fn) return VM_NULL_NATIVE_FUNC;
 			VM_RESULT r = fn(vm);
 			if(r == VM_CRASH){
 				if(ans == VM_OK) ans = r;
@@ -1143,7 +1143,7 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 		}
 
 		default:
-			return VM_HARD_CRASH;
+			return VM_INVALID_BYTECODE;
 		}
 		continue;
 

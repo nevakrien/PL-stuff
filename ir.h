@@ -142,6 +142,11 @@ typedef enum OP_KIND : char {
     OP_ARR_PUSH,
     OP_ARR_AT,
     OP_ARR_DROP,
+
+    // OP_SLICE_FROM_AR,
+    // OP_SLICE_AT,
+    // OP_SLICE_INC,//[data+=extra,len]
+    // OP_SLICE_DEC,//[data,len-=extra]
 } OP_KIND;
 
 typedef struct OP {
@@ -176,11 +181,16 @@ typedef struct Var {
 	const char* name;
 } Var;
 
+typedef struct SigInput {
+    Var var;
+    bool mut;
+} SigInput;
+
 typedef SLICE(Var) VarS;
 typedef SLICE(OP) OPS;
 
 typedef struct Sig {
-    SLICE(Var) ins;
+    SLICE(SigInput) ins;
     SLICE(Var) outs;
 
     bool can_crash;

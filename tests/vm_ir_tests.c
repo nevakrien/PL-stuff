@@ -146,8 +146,8 @@ static void test_basic_external_assign(void) {
         OP_COUNT,
     };
 
-    static Var ins[] = {
-        [ARG_X] = {.tid = TYPE_INT_ID, .name = "x"},
+    static SigInput ins[] = {
+        [ARG_X] = {.var = {.tid = TYPE_INT_ID, .name = "x"}, .mut = true},
     };
 
     static Var outs[] = {
@@ -208,6 +208,8 @@ static void test_basic_external_assign(void) {
         },
     };
 
+    assert(func.sig.ins.data[ARG_X].mut);
+
     VM vm;
     vm_init_for_test(&vm, 1024, 8, 8);
 
@@ -255,9 +257,9 @@ static void test_crash_pad_writes_y1_but_not_y2_after_crash(void) {
         OP_COUNT,
     };
 
-    static Var ins[] = {
-        [ARG_ONE] = {.tid = TYPE_INT_ID, .name = "one"},
-        [ARG_TWO] = {.tid = TYPE_INT_ID, .name = "two"},
+    static SigInput ins[] = {
+        [ARG_ONE] = {.var = {.tid = TYPE_INT_ID, .name = "one"}},
+        [ARG_TWO] = {.var = {.tid = TYPE_INT_ID, .name = "two"}},
     };
 
     static Var outs[] = {
@@ -411,9 +413,9 @@ static void test_crash_pad_body_runs_normally_without_crash(void) {
         OP_COUNT,
     };
 
-    static Var ins[] = {
-        [ARG_ONE] = {.tid = TYPE_INT_ID, .name = "one"},
-        [ARG_TWO] = {.tid = TYPE_INT_ID, .name = "two"},
+    static SigInput ins[] = {
+        [ARG_ONE] = {.var = {.tid = TYPE_INT_ID, .name = "one"}},
+        [ARG_TWO] = {.var = {.tid = TYPE_INT_ID, .name = "two"}},
     };
 
     static Var outs[] = {
@@ -641,10 +643,10 @@ static void test_array_crashes_unwind_stack(void) {
         BOUNDS_OP_COUNT,
     };
 
-    static Var ins[] = {
-        [ARG_ARR]  = {.tid = TYPE_INT_ARRAY4_ID, .name = "arr"},
-        [ARG_IDX]  = {.tid = TYPE_INT_ID,        .name = "idx"},
-        [ARG_MARK] = {.tid = TYPE_INT_ID,        .name = "mark"},
+    static SigInput ins[] = {
+        [ARG_ARR]  = {.var = {.tid = TYPE_INT_ARRAY4_ID, .name = "arr"}},
+        [ARG_IDX]  = {.var = {.tid = TYPE_INT_ID,        .name = "idx"}},
+        [ARG_MARK] = {.var = {.tid = TYPE_INT_ID,        .name = "mark"}},
     };
 
     static Var outs[] = {
@@ -708,7 +710,7 @@ static void test_array_crashes_unwind_stack(void) {
     push_param_or_die(&bounds_vm, &bad_idx);
     push_param_or_die(&bounds_vm, &mark);
 
-    run_func_expect(&bounds_func, &bounds_vm, VM_CRASH);
+    run_func_expect(&bounds_func, &bounds_vm, VM_ARRAY_BOUNDS);
 
     assert(bounds_y == 77);
     assert(bounds_vm.param_stack.len == ARG_COUNT);
@@ -783,7 +785,7 @@ static void test_array_crashes_unwind_stack(void) {
     push_param_or_die(&cap_vm, &bad_idx);
     push_param_or_die(&cap_vm, &mark);
 
-    run_func_expect(&cap_func, &cap_vm, VM_CRASH);
+    run_func_expect(&cap_func, &cap_vm, VM_ARRAY_CAPACITY);
 
     count_t actual_len;
     memcpy(&actual_len, cap_arr, sizeof(actual_len));
@@ -851,12 +853,12 @@ static void test_array_push_at_and_drop(void) {
         OP_COUNT,
     };
 
-    static Var ins[] = {
-        [ARG_ARR]  = {.tid = TYPE_INT_ARRAY4_ID, .name = "arr"},
-        [ARG_ONE]  = {.tid = TYPE_INT_ID,        .name = "one"},
-        [ARG_TWO]  = {.tid = TYPE_INT_ID,        .name = "two"},
-        [ARG_IDX0] = {.tid = TYPE_INT_ID,        .name = "idx0"},
-        [ARG_IDX1] = {.tid = TYPE_INT_ID,        .name = "idx1"},
+    static SigInput ins[] = {
+        [ARG_ARR]  = {.var = {.tid = TYPE_INT_ARRAY4_ID, .name = "arr"}},
+        [ARG_ONE]  = {.var = {.tid = TYPE_INT_ID,        .name = "one"}},
+        [ARG_TWO]  = {.var = {.tid = TYPE_INT_ID,        .name = "two"}},
+        [ARG_IDX0] = {.var = {.tid = TYPE_INT_ID,        .name = "idx0"}},
+        [ARG_IDX1] = {.var = {.tid = TYPE_INT_ID,        .name = "idx1"}},
     };
 
     static Var outs[] = {
@@ -1003,10 +1005,10 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
         OP_COUNT,
     };
 
-    static Var ins[] = {
-        [ARG_ONE] = {.tid = TYPE_INT_ID, .name = "one"},
-        [ARG_TWO] = {.tid = TYPE_INT_ID, .name = "two"},
-        [ARG_BAD] = {.tid = TYPE_INT_ID, .name = "bad"},
+    static SigInput ins[] = {
+        [ARG_ONE] = {.var = {.tid = TYPE_INT_ID, .name = "one"}},
+        [ARG_TWO] = {.var = {.tid = TYPE_INT_ID, .name = "two"}},
+        [ARG_BAD] = {.var = {.tid = TYPE_INT_ID, .name = "bad"}},
     };
 
     static Var outs[] = {
@@ -1158,11 +1160,11 @@ static void test_nested_many_break_skips_outer_tail(void) {
         OP_COUNT,
     };
 
-    static Var ins[] = {
-        [ARG_ONE]   = {.tid = TYPE_INT_ID, .name = "one"},
-        [ARG_TWO]   = {.tid = TYPE_INT_ID, .name = "two"},
-        [ARG_THREE] = {.tid = TYPE_INT_ID, .name = "three"},
-        [ARG_BAD]   = {.tid = TYPE_INT_ID, .name = "bad"},
+    static SigInput ins[] = {
+        [ARG_ONE]   = {.var = {.tid = TYPE_INT_ID, .name = "one"}},
+        [ARG_TWO]   = {.var = {.tid = TYPE_INT_ID, .name = "two"}},
+        [ARG_THREE] = {.var = {.tid = TYPE_INT_ID, .name = "three"}},
+        [ARG_BAD]   = {.var = {.tid = TYPE_INT_ID, .name = "bad"}},
     };
 
     static Var outs[] = {
@@ -1371,8 +1373,8 @@ static void test_compiled_function_call(void) {
         OP_COUNT,
     };
 
-    static Var ins[] = {
-        [0] = {.tid = TYPE_INT_ID, .name = "x"},
+    static SigInput ins[] = {
+        [0] = {.var = {.tid = TYPE_INT_ID, .name = "x"}},
     };
 
     static Var outs[] = {
@@ -1491,13 +1493,17 @@ static void test_callee_crash_unwinds_to_caller_pad(void) {
         CALLEE_BLOCK_COUNT,
     };
 
-    static Var callee_ins[] = {
-        [0] = {.tid = TYPE_INT_ID, .name = "x"},
+    static SigInput callee_ins[] = {
+        [0] = {.var = {.tid = TYPE_INT_ID, .name = "x"}},
     };
 
-    static Var caller_ins[] = {
+    static SigInput caller_ins[] = {
+        [0] = {.var = {.tid = TYPE_INT_ID, .name = "x"}},
+        [1] = {.var = {.tid = TYPE_INT_ID, .name = "mark"}},
+    };
+
+    static Var callee_vars[] = {
         [0] = {.tid = TYPE_INT_ID, .name = "x"},
-        [1] = {.tid = TYPE_INT_ID, .name = "mark"},
     };
 
     static Var caller_outs[] = {
@@ -1548,7 +1554,7 @@ static void test_callee_crash_unwinds_to_caller_pad(void) {
             .types = test_type_slice(),
             .blocks = {.data = callee_blocks, .len = CALLEE_BLOCK_COUNT},
             .ops = {.data = NULL, .len = 0},
-            .vars = {.data = callee_ins, .len = 1},
+            .vars = {.data = callee_vars, .len = 1},
         },
     };
 
@@ -1595,7 +1601,7 @@ static void test_callee_crash_unwinds_to_caller_pad(void) {
 }
 
 static VM_RESULT native_assign_99(VM* vm) {
-    if(vm->param_stack.len < 1) return VM_CRASH;
+    if(vm->param_stack.len < 1) return VM_PARAM_UNDERFLOW;
     num_t x = 99;
     memcpy(TOP(vm->param_stack), &x, sizeof(x));
     return VM_OK;
