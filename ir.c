@@ -2,6 +2,97 @@
 
 typedef STACK(count_t) EpiStack;
 
+typedef enum TypeLayoutState : char {
+	TYPE_LAYOUT_PENDING,
+	TYPE_LAYOUT_ACTIVE,
+	TYPE_LAYOUT_DONE,
+} TypeLayoutState;
+
+static size_t align_up(size_t n,size_t align){
+	assert(align);
+	return (n + align - 1) / align * align;
+}
+
+
+static bool type_layout_one(TypeS types,type_idx tid,TypeLayoutState* states){
+	if(!type_idx_valid(types,tid)) return false;
+	if(states[tid] == TYPE_LAYOUT_DONE) return true;
+	if(states[tid] == TYPE_LAYOUT_ACTIVE) return false;
+
+	states[tid] = TYPE_LAYOUT_ACTIVE;
+	Type* type = &types.data[tid];
+
+	switch(type->kind){
+	case TYPE_INT:
+		type->payload_size = sizeof(num_t);
+		type->align = alignof(num_t);
+		break;
+
+	case TYPE_BYTE:
+		type->payload_size = 1;
+		type->align = 1;
+		break;
+
+	case TYPE_ARRAY: {
+		type_idx elem_tid = type->data.array.elem;
+		if(!type_layout_one(types,elem_tid,states)) return false;
+
+		Type elem = types.data[elem_tid];
+		size_t len_size = sizeof(count_t);
+		size_t data_offset = align_up(len_size,elem.align);
+		type->align = elem.align > alignof(count_t) ? elem.align : alignof(count_t);
+		type->data.array.data_offset = data_offset;
+		type->payload_size = align_up(data_offset + elem.payload_size * type->data.array.capacity,type->align);
+		break;
+	}
+
+	case TYPE_STRUCT: {
+		size_t offset = 0;
+		size_t max_align = 1;
+		TypeFieldS fields = type->data.fields;
+
+		for(size_t i=0;i<fields.len;i++){
+			type_idx field_tid = fields.data[i].tid;
+			if(!type_layout_one(types,field_tid,states)) return false;
+
+			Type field_type = types.data[field_tid];
+			offset = align_up(offset,field_type.align);
+			fields.data[i].offset = offset;
+			offset += field_type.payload_size;
+			if(max_align < field_type.align) max_align = field_type.align;
+		}
+
+		type->align = max_align;
+		type->payload_size = align_up(offset,max_align);
+		break;
+	}
+	}
+
+	type->size = align_up(type->payload_size,CELL_ALIGN);
+	states[tid] = TYPE_LAYOUT_DONE;
+	return true;
+}
+
+bool type_layout_all(TypeS types){
+	if(types.len < 2) return false;
+	if(types.data[TYPE_INT_ID].kind != TYPE_INT) return false;
+	if(types.data[TYPE_BYTE_ID].kind != TYPE_BYTE) return false;
+
+	TypeLayoutState* states = calloc(types.len,sizeof(*states));
+	if(!states) return false;
+
+	bool ok = true;
+	for(type_idx tid=0;tid<types.len;tid++){
+		if(!type_layout_one(types,tid,states)){
+			ok = false;
+			break;
+		}
+	}
+
+	free(states);
+	return ok;
+}
+
 static void _remove_defers(count_t src,count_t dst,const BlockS* blocks,BlocksBuilder* res,EpiStack* epis){
 
 	Block b = blocks->data[src];
@@ -11,15 +102,19 @@ static void _remove_defers(count_t src,count_t dst,const BlockS* blocks,BlocksBu
 
 	switch(b.kind){
 	case BLOCK_BASIC: break;		
-    case BLOCK_DEFER: {
-    	count_t dst_next = res->len;
-    	count_t dst_defer = res->len+1;
-    	EXTEND_HEAP(*res,2);
+	    case BLOCK_DEFER: {
+	    	count_t dst_pad = res->len;
+	    	count_t dst_defer = res->len+1;
+	    	count_t dst_next = res->len+2;
+	    	EXTEND_HEAP(*res,3);
 
+	    	res->data[dst].kind = BLOCK_MANY;
+	    	res->data[dst].data.many.start = dst_pad;
+	    	res->data[dst].data.many.len = 2;
 
-    	res->data[dst].data.defer.next = dst_next;
-    	res->data[dst].data.defer.defer = dst_defer;
-    	res->data[dst].kind = BLOCK_CRASH_PAD;
+	    	res->data[dst_pad].kind = BLOCK_CRASH_PAD;
+	    	res->data[dst_pad].data.crash_pad.body = dst_next;
+	    	res->data[dst_pad].data.crash_pad.pad = dst_defer;
 
 		// The defer body must not have itself on the epilogue stack.
 		_remove_defers(b.data.defer.defer,dst_defer,blocks,res,epis);
@@ -117,8 +212,13 @@ static void _remove_defers(count_t src,count_t dst,const BlockS* blocks,BlocksBu
 		free(actual.data);
 		break;
     }
-
-    case BLOCK_VAR: break; 
+    case BLOCK_VAR: {
+    	count_t body = res->len;
+    	EXTEND_HEAP(*res,1);
+    	res->data[dst].data.var.body = body;
+    	_remove_defers(b.data.var.body,body,blocks,res,epis);
+    	break;
+    }
 	}
 
 	epis->len--;

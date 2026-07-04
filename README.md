@@ -32,3 +32,9 @@ break simply goes up some number of levels. it can be used to implement continue
 
 ## Var
 allocates a var on the local stack for the duration of the body.
+
+# Types
+The IR has four type kinds: `int`, `byte`, fixed-capacity stack arrays, and structs.
+Arrays are values laid out as `[len][data...]`, where `len` is a `count_t` and `data` has room for the array capacity.
+Each type records its compact `payload_size`, natural `align`, and stack allocation `size`.
+Stack allocation size is rounded up to `alignof(Cell)`, not `sizeof(Cell)`, so on a 32-bit target with 4-byte cell alignment a 3-byte payload occupies 4 stack bytes rather than a full 8-byte cell.

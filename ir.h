@@ -26,12 +26,17 @@
 
 typedef NUMERIC_TYPE num_t;
 typedef OFFSET_TYPE offset_t;
-typedef OFFSET_TYPE uoffset_t;
+typedef OFFSET_UNSIGNED_TYPE uoffset_t;
 typedef COUNT_TYPE count_t;
 typedef LIFE_TYPE life_t;
 
 typedef count_t var_idx;
 typedef count_t block_idx;
+typedef count_t type_idx;
+
+static const type_idx TYPE_INT_ID = 0;
+static const type_idx TYPE_BYTE_ID = 1;
+static const type_idx TYPE_INVALID_ID = (type_idx)-1;
 
 typedef union Cell {
 	life_t life;
@@ -56,6 +61,36 @@ static const size_t CELL_ALIGN = alignof(Cell);
 }
 
 #define TOP(x) ((x).data[(x).len-1])
+
+typedef enum TYPE_KIND : char {
+    TYPE_INT,
+    TYPE_BYTE,
+    TYPE_ARRAY,
+    TYPE_STRUCT,
+} TYPE_KIND;
+
+typedef struct TypeField {
+    const char* name;
+    type_idx tid;
+    size_t offset;
+} TypeField;
+
+typedef SLICE(TypeField) TypeFieldS;
+
+typedef struct Type {
+    TYPE_KIND kind;
+    const char* name;
+    size_t payload_size;
+    size_t size;
+    size_t align;
+    union {
+        // Stack arrays are fixed-capacity values laid out as [len][data...].
+        struct {type_idx elem; count_t capacity; size_t data_offset;} array;
+        TypeFieldS fields;
+    } data;
+} Type;
+
+typedef SLICE(Type) TypeS;
 
 #include <assert.h>
 #include <stdlib.h>
@@ -129,7 +164,7 @@ typedef enum BLOCK_KIND : count_t {
 
 
 typedef struct Var {
-    size_t tid;//-1 means no var
+    type_idx tid;//TYPE_INVALID_ID means no var
 	const char* name;
 } Var;
 
@@ -167,12 +202,47 @@ typedef struct Func {
     const char* name;
 
     Sig sig;
+    TypeS types;
     //starts always at block 0
     //existing the first block is the same as returning (altogh re entring then exiting is not)
     BlockS blocks;//malloced
     OPS ops;
     VarS vars;
 } Func;
+
+
+static inline Type type_int(void){
+    return (Type){.kind=TYPE_INT,.name="int",.payload_size=sizeof(num_t),.align=alignof(num_t)};
+}
+
+static inline Type type_byte(void){
+    return (Type){.kind=TYPE_BYTE,.name="byte",.payload_size=1,.align=1};
+}
+
+static inline Type type_array(type_idx elem,count_t capacity){
+    return (Type){.kind=TYPE_ARRAY,.size=0,.align=0,.data.array={.elem=elem,.capacity=capacity}};
+}
+
+static inline Type type_struct(const char* name,TypeFieldS fields){
+    return (Type){.kind=TYPE_STRUCT,.name=name,.size=0,.align=0,.data.fields=fields};
+}
+
+static inline bool type_idx_valid(TypeS types,type_idx tid){
+    return tid < types.len;
+}
+
+static inline bool type_is_builtin(type_idx tid){
+    return tid == TYPE_INT_ID || tid == TYPE_BYTE_ID;
+}
+
+static inline size_t type_stack_size(TypeS types,type_idx tid){
+    assert(type_idx_valid(types,tid));
+    return types.data[tid].size;
+}
+
+
+bool type_layout_all(TypeS types);
+
 
 
 //move all defer statments to be inlined in the correct places and in crash pads.
