@@ -3,53 +3,36 @@
 
 #include "ir.h"
 
-typedef struct Handle {
-	Cell* data;
-	const Var* var;
-} Handle;
+typedef enum ByteCode : char {
+	B_DONE,
+	B_RET,
+	B_PUSH_VAR,
+	B_PICK,
+	B_DROP_N,
+	B_JUMP,
+	B_BRANCH,
+	B_CALL,
 
-static const ssize_t NO_EPI = -1;
-static const ssize_t FUNC_END = -2;
+	//numeric buildins
+} ByteCode;
 
-typedef struct UnwindFrame {
-	Handle var;
-
-	size_t param_bottom;//what to set the param stack to in the end
-	ssize_t epi; //-1 means nothing
-} UnwindFrame;
-
-typedef struct FuncFrame {
-	const Func* func;
-	const Block* block;
-	const OP* op;
-}FuncFrame;
-
-typedef enum VM_RESULT{
-	VM_OK,
-	VM_CRASHED,
-	VM_OOM_FUNCS,
-	VM_OOM_UNWIND,
-	
-	VM_PARAM_UNDERFLOW,
-}VM_RESULT;
-
+typedef SLICE(ByteCode) VmCode;
 
 
 typedef struct VM {
-	STACK(UnwindFrame) unwind_stack;
-	STACK(FuncFrame) func_stack;
-
 	STACK(Cell) storage;
-	STACK(Handle) param_stack;
-
-	STACK(Func) functions;//can maybe realloc?
-
+	STACK(Cell*) param_stack;
 } VM;
 
+typedef enum VM_RESULT {
+	VM_OK,
+	VM_CRASH,
+	VM_OOM_PARAM,
+	VM_OOM_STORAGE,
+} VM_RESULT;
 
 
-
-VM_RESULT vm_run(VM* vm);
-VM_RESULT vm_call_func(VM* vm,const Func* func);
+VmCode vm_compile_no_defers(const Func* func);
+VM_RESULT vm_run(VM* vm,const ByteCode* code);
 
 #endif // VM_H

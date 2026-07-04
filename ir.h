@@ -30,6 +30,9 @@ typedef OFFSET_TYPE uoffset_t;
 typedef COUNT_TYPE count_t;
 typedef LIFE_TYPE life_t;
 
+typedef count_t var_idx;
+typedef count_t block_idx;
+
 typedef union Cell {
 	life_t life;
 	void* ptr;
@@ -38,6 +41,8 @@ typedef union Cell {
 	ssize_t ssize;
 	num_t num;
 } Cell;
+
+static const size_t CELL_ALIGN = alignof(Cell);
 
 #define STACK(T) struct { \
     T *data;            \
@@ -50,12 +55,29 @@ typedef union Cell {
     size_t len;         \
 }
 
-#define TOP(x) (x.data[x.len-1])
+#define TOP(x) ((x).data[(x).len-1])
 
-typedef enum OP_KIND : uoffset_t {
-    OP_NULL,//goto terminator
+#include <assert.h>
+#include <stdlib.h>
 
-    OP_CALL,
+
+#define EXTEND_HEAP(s,l) do {\
+    (s).len+=(l);\
+    (s).cap = 8+2*(s).len;\
+    (s).data=realloc((s).data,(s).cap * sizeof(*(s).data));\
+    assert((s).data);\
+} while(0)
+
+#define PUSH_HEAP(s,x) do {\
+    size_t _push_heap_idx = (s).len;\
+    EXTEND_HEAP(s,1);\
+    (s).data[_push_heap_idx]=(x);\
+} while(0)
+
+typedef enum OP_KIND : char {
+    OP_NULL=0,//null-terminator
+
+    OP_CALL,//extra=id
 
     OP_ASSIGN,
     OP_ADD_ASSIGN,
@@ -68,12 +90,11 @@ typedef enum OP_KIND : uoffset_t {
     OP_XOR_ASSIGN,
     OP_BIT_NOT_ASSIGN,
 
-    OP_DROP,
-    OP_PICK,
+    OP_DROP,//extra=how many
 
-    OP_PUSH_VAR,    
-    OP_PUSH_ARG,
-    OP_PUSH_GLOBAL,
+    OP_PUSH_VAR,//extra=idx    
+    OP_PUSH_ARG,//extra=idx 
+    OP_PUSH_GLOBAL,//extra=idx
 
     OP_ARR_PUSH,
     OP_ARR_AT,
@@ -86,59 +107,60 @@ typedef struct OP {
 } OP;
 
 
-typedef enum TERM_KIND : uoffset_t {
-    TERM_SIMPLE,
-    TERM_BRANCH,
-    TERM_RET,
+typedef enum BLOCK_KIND : count_t {
+    BLOCK_BASIC,
+    BLOCK_DEFER,
+    BLOCK_MANY,
 
-    TERM_RET_UNWIND,
-    TERM_UNWIND,
-    TERM_PUSH_UNWIND,
-    TERM_POP_UNWIND,
+    BLOCK_CRASH,
+    BLOCK_HARD_CRASH,
+    BLOCK_CRASH_PAD,
+    
+    BLOCK_BRANCH,
+    BLOCK_LOOP,
 
-} TERM_KIND;
+    BLOCK_BREAK,//breaking out of all scoeps is return
+    //a break may not break out of a defer logic block
+
+    BLOCK_VAR,
+
+} BLOCK_KIND;
 
 
-
-typedef struct Terminator {
-	TERM_KIND kind;
-	union { 
-        struct {
-            offset_t tgt;
-        } simple;
-        struct {
-            offset_t yes;
-            offset_t no;
-        }branch;
-        struct {
-            offset_t tgt;
-            offset_t unwind;
-        } push_unwind;
-
-    } data;
-} Terminator;
 
 typedef struct Var {
     size_t tid;//-1 means no var
-    size_t size;
 	const char* name;
 } Var;
 
+typedef SLICE(Var) VarS;
 typedef SLICE(OP) OPS;
 
 typedef struct Sig {
     SLICE(Var) ins;
     SLICE(Var) outs;
+
+    bool can_crash;
 } Sig;
 
+//this is a tree stored as a flat DAG 
+//it can be loaded directly from disk
 typedef struct Block {    
-	OPS ops;//null terminated
-
-    Terminator term;
-
-    Var var;//may be null (meaning no var)
+	BLOCK_KIND kind;
+    union {
+        struct {block_idx start; count_t len;} basic;
+        struct {block_idx start; count_t len;} many;
+        struct {block_idx next; block_idx defer;} defer;//same as crash_pad
+        struct {block_idx body; block_idx pad;} crash_pad;
+        struct {var_idx cond; block_idx yes; block_idx no;} branch;
+        struct {var_idx cond; block_idx body;} loop;
+        count_t level;
+        struct {var_idx var; block_idx body;} var;
+    } data;
 } Block;
 
+typedef SLICE(Block) BlockS;
+typedef STACK(Block) BlocksBuilder;
 
 
 typedef struct Func {
@@ -147,7 +169,13 @@ typedef struct Func {
     Sig sig;
     //starts always at block 0
     //existing the first block is the same as returning (altogh re entring then exiting is not)
-    SLICE(Block) blocks;
+    BlockS blocks;//malloced
+    OPS ops;
+    VarS vars;
 } Func;
+
+
+//move all defer statments to be inlined in the correct places and in crash pads.
+void remove_defers(BlockS* blocks);
 
 #endif // IR_H
