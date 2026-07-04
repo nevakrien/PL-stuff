@@ -65,6 +65,7 @@ typedef union Cell {
     size_t len;         \
 }
 
+
 #define TOP(x) ((x).data[(x).len-1])
 
 typedef enum TYPE_KIND : char {
@@ -72,6 +73,7 @@ typedef enum TYPE_KIND : char {
     TYPE_BYTE,
     TYPE_ARRAY,
     TYPE_STRUCT,
+    TYPE_NATIVE_FUNC_POINTER,// function with signature (VM*)->VM_RESULT
 } TYPE_KIND;
 
 typedef struct TypeField {
@@ -118,6 +120,7 @@ typedef enum OP_KIND : char {
     OP_NULL=0,//null-terminator
 
     OP_CALL,//extra=id
+    OP_CALL_NATIVE_ON_STACK,
 
     OP_ASSIGN,
     OP_ADD_ASSIGN,
@@ -214,6 +217,15 @@ typedef struct Func {
     OPS ops;
     VarS vars;
 } Func;
+
+typedef struct Global{
+    Var var;
+    void* mem;//note may be not owned like for function pointers.
+    void (*free_func)(void*);   // NULL means not owned / no cleanup needed
+} Global;
+
+typedef STACK(Global) GlobalS;
+typedef STACK(Func) Funcs;
 
 
 static inline Type type_int(void){

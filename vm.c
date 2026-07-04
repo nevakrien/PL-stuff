@@ -28,6 +28,7 @@ typedef STACK(Scope) ScopeStack;
 
 typedef struct Compiler {
 	const Func* func;
+	CompileContext* ctx;
 	CodeBuilder code;
 	TypeStack params;
 	VarLayout* vars;
@@ -35,6 +36,14 @@ typedef struct Compiler {
 	offset_t frame_size;
 	size_t crash_depth;
 } Compiler;
+
+typedef struct ReturnFrame {
+	const ByteCode* pc;
+	const ByteCode* base;
+	size_t param_base;
+} ReturnFrame;
+
+VmCode vm_compile_no_defers(const Func* func,CompileContext* ctx);
 
 typedef struct CompilerState {
 	TypeStack params;
@@ -81,6 +90,10 @@ static bool emit_size(CodeBuilder* code,size_t x){
 	return emit_bytes(code,&x,sizeof(x));
 }
 
+static bool emit_pointer(CodeBuilder* code,const void* x){
+	return emit_bytes(code,&x,sizeof(x));
+}
+
 static bool patch_uoffset(CodeBuilder* code,size_t at,size_t target){
 	if(target > (size_t)(uoffset_t)-1) return false;
 	uoffset_t x = (uoffset_t)target;
@@ -104,6 +117,11 @@ static const ByteCode* read_count(const ByteCode* pc,count_t* x){
 }
 
 static const ByteCode* read_size(const ByteCode* pc,size_t* x){
+	memcpy(x,pc,sizeof(*x));
+	return pc + sizeof(*x);
+}
+
+static const ByteCode* read_pointer(const ByteCode* pc,const void** x){
 	memcpy(x,pc,sizeof(*x));
 	return pc + sizeof(*x);
 }
@@ -284,6 +302,54 @@ static bool scope_finish(Compiler* c,size_t target,bool* had_patches){
 
 static CompileResult compile_block(Compiler* c,block_idx idx);
 
+static bool ensure_code_slot(CompileContext* ctx,size_t idx){
+	if(idx < ctx->code.len) return true;
+	size_t old_len = ctx->code.len;
+	if(idx >= ctx->code.cap){
+		size_t cap = ctx->code.cap ? ctx->code.cap : 8;
+		while(cap <= idx) cap *= 2;
+		VmCode* data = realloc(ctx->code.data,cap * sizeof(*ctx->code.data));
+		if(!data) return false;
+		ctx->code.data = data;
+		ctx->code.cap = cap;
+	}
+	ctx->code.len = idx + 1;
+	memset(ctx->code.data + old_len,0,(ctx->code.len - old_len) * sizeof(*ctx->code.data));
+	return true;
+}
+
+static VmCode* compile_context_func_code(CompileContext* ctx,count_t idx){
+	if(!ctx || idx >= ctx->funcs.len) return NULL;
+	if(!ensure_code_slot(ctx,idx)) return NULL;
+
+	VmCode* code = &ctx->code.data[idx];
+	if(!code->data){
+		*code = vm_compile_no_defers(&ctx->funcs.data[idx],ctx);
+		if(!code->data) return NULL;
+	}
+	return code;
+}
+
+static bool compile_func_call(Compiler* c,count_t idx){
+	VmCode* code = compile_context_func_code(c->ctx,idx);
+	if(!code) return false;
+	Func* func = &c->ctx->funcs.data[idx];
+	if(c->params.len < func->sig.outs.len + func->sig.ins.len) return false;
+
+	size_t start = c->params.len - func->sig.outs.len - func->sig.ins.len;
+	for(size_t i=0;i<func->sig.outs.len;i++){
+		if(c->params.data[start + i] != func->sig.outs.data[i].tid) return false;
+	}
+	for(size_t i=0;i<func->sig.ins.len;i++){
+		if(c->params.data[start + func->sig.outs.len + i] != func->sig.ins.data[i].tid) return false;
+	}
+
+	if(!emit_op(&c->code,B_CALL)) return false;
+	if(!emit_pointer(&c->code,code->data)) return false;
+	if(!emit_count(&c->code,(count_t)(func->sig.outs.len + func->sig.ins.len))) return false;
+	return pop_types(&c->params,(count_t)func->sig.ins.len);
+}
+
 static bool compile_op(Compiler* c,OP op){
 	TypeS types = c->func->types;
 	switch(op.kind){
@@ -291,7 +357,14 @@ static bool compile_op(Compiler* c,OP op){
 		return true;
 
 	case OP_CALL:
-		return emit_op(&c->code,B_HARD_CRASH);
+		return compile_func_call(c,op.extra);
+
+	case OP_CALL_NATIVE_ON_STACK:
+		if(c->params.len < 1) return false;
+		if(!type_idx_valid(types,TOP(c->params))) return false;
+		if(types.data[TOP(c->params)].kind != TYPE_NATIVE_FUNC_POINTER) return false;
+		if(!emit_op(&c->code,B_CALL_NATIVE)) return false;
+		return pop_types(&c->params,1);
 
 	case OP_ASSIGN: {
 		if(c->params.len < 2) return false;
@@ -338,7 +411,11 @@ static bool compile_op(Compiler* c,OP op){
 		return emit_push_arg(c,op.extra);
 
 	case OP_PUSH_GLOBAL:
-		return emit_op(&c->code,B_HARD_CRASH);
+		if(!c->ctx || op.extra >= c->ctx->globals.len) return false;
+		if(!type_idx_valid(types,c->ctx->globals.data[op.extra].var.tid)) return false;
+		if(!emit_op(&c->code,B_PUSH_GLOBAL)) return false;
+		if(!emit_pointer(&c->code,c->ctx->globals.data[op.extra].mem)) return false;
+		return push_type(&c->params,c->ctx->globals.data[op.extra].var.tid);
 
 	case OP_ARR_AT: {
 		if(c->params.len < 2) return false;
@@ -690,8 +767,8 @@ static CompileResult compile_block(Compiler* c,block_idx idx){
 	return COMPILE_FAIL;
 }
 
-VmCode vm_compile_no_defers(const Func* func){
-	Compiler c = {.func=func};
+VmCode vm_compile_no_defers(const Func* func,CompileContext* ctx){
+	Compiler c = {.func=func,.ctx=ctx};
 	VmCode fail = {0};
 	if(!func || func->blocks.len == 0) return fail;
 	if(!type_layout_all(func->types)) return fail;
@@ -769,13 +846,13 @@ static bool storage_resize(VM* vm,offset_t amount){
 	return true;
 }
 
-static bool storage_push_return(VM* vm,const ByteCode* ret){
+static bool storage_push_return(VM* vm,ReturnFrame ret){
 	if(!storage_resize(vm,(offset_t)sizeof(ret))) return false;
 	memcpy(vm->storage.data + vm->storage.len - sizeof(ret),&ret,sizeof(ret));
 	return true;
 }
 
-static bool storage_pop_return(VM* vm,const ByteCode** ret){
+static bool storage_pop_return(VM* vm,ReturnFrame* ret){
 	if(vm->storage.len < sizeof(*ret)) return false;
 	vm->storage.len -= sizeof(*ret);
 	memcpy(ret,vm->storage.data + vm->storage.len,sizeof(*ret));
@@ -785,7 +862,8 @@ static bool storage_pop_return(VM* vm,const ByteCode** ret){
 VM_RESULT vm_run(VM* vm,const ByteCode* code){
 	const ByteCode* base = code;
 	const ByteCode* pc = code;
-	if(!storage_push_return(vm,NULL)) return VM_OOM_STORAGE;
+	size_t param_base = 0;
+	if(!storage_push_return(vm,(ReturnFrame){0})) return VM_OOM_STORAGE;
 
 	for(;;){
 		switch(*pc++){
@@ -793,10 +871,12 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			return VM_OK;
 
 		case B_RET: {
-			const ByteCode* ret = NULL;
+			ReturnFrame ret = {0};
 			if(!storage_pop_return(vm,&ret)) return VM_OK;
-			if(!ret) return VM_OK;
-			pc = ret;
+			if(!ret.pc) return VM_OK;
+			pc = ret.pc;
+			base = ret.base;
+			param_base = ret.param_base;
 			break;
 		}
 
@@ -819,8 +899,16 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 		case B_PUSH_ARG: {
 			count_t idx;
 			pc = read_count(pc,&idx);
-			if(idx >= vm->param_stack.len) return VM_CRASH;
-			if(!push_param(vm,vm->param_stack.data[idx])) return VM_OOM_PARAM;
+			if(param_base + idx >= vm->param_stack.len) return VM_CRASH;
+			if(!push_param(vm,vm->param_stack.data[param_base + idx])) return VM_OOM_PARAM;
+			break;
+		}
+
+		case B_PUSH_GLOBAL: {
+			const void* ptr;
+			pc = read_pointer(pc,&ptr);
+			if(!ptr) return VM_CRASH;
+			if(!push_param(vm,(void*)ptr)) return VM_OOM_PARAM;
 			break;
 		}
 
@@ -982,10 +1070,27 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			return VM_CRASH;
 
 		case B_CALL: {
-			uoffset_t target;
-			pc = read_uoffset(pc,&target);
-			if(!storage_push_return(vm,pc)) return VM_OOM_STORAGE;
-			pc = base + target;
+			const void* target;
+			count_t argc;
+			pc = read_pointer(pc,&target);
+			pc = read_count(pc,&argc);
+			if(!target) return VM_CRASH;
+			if(vm->param_stack.len < argc) return VM_CRASH;
+			if(!storage_push_return(vm,(ReturnFrame){.pc=pc,.base=base,.param_base=param_base})) return VM_OOM_STORAGE;
+			base = target;
+			pc = target;
+			param_base = vm->param_stack.len - argc;
+			break;
+		}
+
+		case B_CALL_NATIVE: {
+			if(vm->param_stack.len < 1) return VM_CRASH;
+			VmNativeFunc fn = NULL;
+			memcpy(&fn,TOP(vm->param_stack),sizeof(fn));
+			vm->param_stack.len--;
+			if(!fn) return VM_CRASH;
+			VM_RESULT r = fn(vm);
+			if(r != VM_OK) return r;
 			break;
 		}
 

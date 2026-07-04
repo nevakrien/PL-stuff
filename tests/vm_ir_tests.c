@@ -28,10 +28,18 @@ static Type test_types[] = {
             .capacity = 4,
         },
     },
+    [3] = {
+        .kind = TYPE_NATIVE_FUNC_POINTER,
+        .name = "native_fn",
+        .payload_size = sizeof(VmNativeFunc),
+        .size = sizeof(VmNativeFunc),
+        .align = alignof(VmNativeFunc),
+    },
 };
 
 enum {
     TYPE_INT_ARRAY4_ID = 2,
+    TYPE_NATIVE_FUNC_POINTER_ID = 3,
 };
 
 static TypeS test_type_slice(void) {
@@ -73,7 +81,7 @@ static void push_param_or_die(VM* vm, void* ptr) {
 }
 
 static void run_func_or_die(Func* func, VM* vm) {
-    VmCode code = vm_compile_no_defers(func);
+    VmCode code = vm_compile_no_defers(func, NULL);
     assert(code.data);
     assert(code.len > 0);
 
@@ -84,7 +92,7 @@ static void run_func_or_die(Func* func, VM* vm) {
 }
 
 static void run_func_expect(Func* func, VM* vm, VM_RESULT expected) {
-    VmCode code = vm_compile_no_defers(func);
+    VmCode code = vm_compile_no_defers(func, NULL);
     assert(code.data);
     assert(code.len > 0);
 
@@ -560,7 +568,7 @@ static void test_uncaught_crash_returns_vm_crash(void) {
         },
     };
 
-    VmCode code = vm_compile_no_defers(&func);
+    VmCode code = vm_compile_no_defers(&func, NULL);
     assert(code.data);
     assert(code.len > 0);
 
@@ -1045,6 +1053,290 @@ static void test_nested_many_break_skips_outer_tail(void) {
     vm_free_for_test(&vm);
 }
 
+static void test_push_global_assigns_value(void) {
+    enum {
+        ARG_Y,
+        ARG_COUNT,
+    };
+
+    enum {
+        GLOBAL_X,
+        GLOBAL_COUNT,
+    };
+
+    enum {
+        BLOCK_ROOT,
+        BLOCK_COUNT,
+    };
+
+    enum {
+        OP_PUSH_Y,
+        OP_PUSH_X,
+        OP_ASSIGN_Y,
+        OP_COUNT,
+    };
+
+    static Var outs[] = {
+        {.tid = TYPE_INT_ID, .name = "y"},
+    };
+
+    static Var vars[] = {
+        [ARG_Y] = {.tid = TYPE_INT_ID, .name = "y"},
+    };
+
+    static OP ops[] = {
+        [OP_PUSH_Y]   = {.kind = OP_PUSH_ARG,    .extra = ARG_Y},
+        [OP_PUSH_X]   = {.kind = OP_PUSH_GLOBAL, .extra = GLOBAL_X},
+        [OP_ASSIGN_Y] = {.kind = OP_ASSIGN,      .extra = 0},
+    };
+
+    static Block blocks[] = {
+        [BLOCK_ROOT] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = OP_PUSH_Y, .len = 3},
+        },
+    };
+
+    num_t x = 42;
+    Global globals[] = {
+        [GLOBAL_X] = {.var = {.tid = TYPE_INT_ID, .name = "x"}, .mem = &x},
+    };
+
+    CompileContext ctx = {
+        .globals = {.data = globals, .len = GLOBAL_COUNT, .cap = GLOBAL_COUNT},
+    };
+
+    Func func = {
+        .name = "test_push_global_assigns_value",
+        .sig = {
+            .ins = {.data = NULL, .len = 0},
+            .outs = {.data = outs, .len = 1},
+            .can_crash = false,
+        },
+        .types = test_type_slice(),
+        .blocks = {.data = blocks, .len = BLOCK_COUNT},
+        .ops = {.data = ops, .len = OP_COUNT},
+        .vars = {.data = vars, .len = ARG_COUNT},
+    };
+
+    VM vm;
+    vm_init_for_test(&vm, 1024, 8, 8);
+
+    num_t y = 0;
+    push_param_or_die(&vm, &y);
+
+    VmCode code = vm_compile_no_defers(&func, &ctx);
+    assert(code.data);
+    assert(vm_run(&vm, code.data) == VM_OK);
+
+    assert(y == x);
+
+    free(code.data);
+    vm_free_for_test(&vm);
+}
+
+static void test_compiled_function_call(void) {
+    enum {
+        ARG_Y,
+        ARG_X,
+        ARG_COUNT,
+    };
+
+    enum {
+        FUNC_CALLEE,
+        FUNC_COUNT,
+    };
+
+    enum {
+        BLOCK_ROOT,
+        BLOCK_COUNT,
+    };
+
+    enum {
+        OP_PUSH_Y,
+        OP_PUSH_X,
+        OP_CALL_CALLEE,
+        OP_COUNT,
+    };
+
+    static Var ins[] = {
+        [0] = {.tid = TYPE_INT_ID, .name = "x"},
+    };
+
+    static Var outs[] = {
+        [0] = {.tid = TYPE_INT_ID, .name = "y"},
+    };
+
+    static Var vars[] = {
+        [ARG_Y] = {.tid = TYPE_INT_ID, .name = "y"},
+        [ARG_X] = {.tid = TYPE_INT_ID, .name = "x"},
+    };
+
+    static OP callee_ops[] = {
+        [OP_PUSH_Y] = {.kind = OP_PUSH_ARG, .extra = ARG_Y},
+        [OP_PUSH_X] = {.kind = OP_PUSH_ARG, .extra = ARG_X},
+        [OP_CALL_CALLEE] = {.kind = OP_ASSIGN, .extra = 0},
+    };
+
+    static OP caller_ops[] = {
+        [OP_PUSH_Y] = {.kind = OP_PUSH_ARG, .extra = ARG_Y},
+        [OP_PUSH_X] = {.kind = OP_PUSH_ARG, .extra = ARG_X},
+        [OP_CALL_CALLEE] = {.kind = OP_CALL, .extra = FUNC_CALLEE},
+    };
+
+    static Block blocks[] = {
+        [BLOCK_ROOT] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = OP_PUSH_Y, .len = 3},
+        },
+    };
+
+    Func funcs[] = {
+        [FUNC_CALLEE] = {
+            .name = "callee_assign",
+            .sig = {
+                .ins = {.data = ins, .len = 1},
+                .outs = {.data = outs, .len = 1},
+                .can_crash = false,
+            },
+            .types = test_type_slice(),
+            .blocks = {.data = blocks, .len = BLOCK_COUNT},
+            .ops = {.data = callee_ops, .len = OP_COUNT},
+            .vars = {.data = vars, .len = ARG_COUNT},
+        },
+    };
+
+    Func caller = {
+        .name = "caller",
+        .sig = {
+            .ins = {.data = ins, .len = 1},
+            .outs = {.data = outs, .len = 1},
+            .can_crash = false,
+        },
+        .types = test_type_slice(),
+        .blocks = {.data = blocks, .len = BLOCK_COUNT},
+        .ops = {.data = caller_ops, .len = OP_COUNT},
+        .vars = {.data = vars, .len = ARG_COUNT},
+    };
+
+    CompileContext ctx = {
+        .funcs = {.data = funcs, .len = FUNC_COUNT, .cap = FUNC_COUNT},
+    };
+
+    VM vm;
+    vm_init_for_test(&vm, 1024, 16, 8);
+
+    num_t y = 0;
+    num_t x = 17;
+    push_param_or_die(&vm, &y);
+    push_param_or_die(&vm, &x);
+
+    VmCode code = vm_compile_no_defers(&caller, &ctx);
+    assert(code.data);
+    assert(ctx.code.len == FUNC_COUNT);
+    assert(ctx.code.data[FUNC_CALLEE].data);
+    assert(vm_run(&vm, code.data) == VM_OK);
+
+    assert(y == x);
+
+    free(code.data);
+    for(size_t i=0;i<ctx.code.len;i++) free(ctx.code.data[i].data);
+    free(ctx.code.data);
+    vm_free_for_test(&vm);
+}
+
+static VM_RESULT native_assign_99(VM* vm) {
+    if(vm->param_stack.len < 1) return VM_CRASH;
+    num_t x = 99;
+    memcpy(TOP(vm->param_stack), &x, sizeof(x));
+    return VM_OK;
+}
+
+static void test_native_call_from_global(void) {
+    enum {
+        ARG_Y,
+        ARG_COUNT,
+    };
+
+    enum {
+        GLOBAL_NATIVE,
+        GLOBAL_COUNT,
+    };
+
+    enum {
+        BLOCK_ROOT,
+        BLOCK_COUNT,
+    };
+
+    enum {
+        OP_PUSH_Y,
+        OP_PUSH_NATIVE,
+        OP_CALL_NATIVE,
+        OP_COUNT,
+    };
+
+    static Var outs[] = {
+        {.tid = TYPE_INT_ID, .name = "y"},
+    };
+
+    static Var vars[] = {
+        [ARG_Y] = {.tid = TYPE_INT_ID, .name = "y"},
+    };
+
+    static OP ops[] = {
+        [OP_PUSH_Y]      = {.kind = OP_PUSH_ARG,             .extra = ARG_Y},
+        [OP_PUSH_NATIVE] = {.kind = OP_PUSH_GLOBAL,          .extra = GLOBAL_NATIVE},
+        [OP_CALL_NATIVE] = {.kind = OP_CALL_NATIVE_ON_STACK, .extra = 0},
+    };
+
+    static Block blocks[] = {
+        [BLOCK_ROOT] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = OP_PUSH_Y, .len = 3},
+        },
+    };
+
+    VmNativeFunc native = native_assign_99;
+    Global globals[] = {
+        [GLOBAL_NATIVE] = {
+            .var = {.tid = TYPE_NATIVE_FUNC_POINTER_ID, .name = "native"},
+            .mem = &native,
+        },
+    };
+
+    CompileContext ctx = {
+        .globals = {.data = globals, .len = GLOBAL_COUNT, .cap = GLOBAL_COUNT},
+    };
+
+    Func func = {
+        .name = "test_native_call_from_global",
+        .sig = {
+            .ins = {.data = NULL, .len = 0},
+            .outs = {.data = outs, .len = 1},
+            .can_crash = false,
+        },
+        .types = test_type_slice(),
+        .blocks = {.data = blocks, .len = BLOCK_COUNT},
+        .ops = {.data = ops, .len = OP_COUNT},
+        .vars = {.data = vars, .len = ARG_COUNT},
+    };
+
+    VM vm;
+    vm_init_for_test(&vm, 1024, 8, 8);
+
+    num_t y = 0;
+    push_param_or_die(&vm, &y);
+
+    VmCode code = vm_compile_no_defers(&func, &ctx);
+    assert(code.data);
+    assert(vm_run(&vm, code.data) == VM_OK);
+
+    assert(y == 99);
+
+    free(code.data);
+    vm_free_for_test(&vm);
+}
+
 int main(void) {
     test_push_param_oom();
     puts("ok: test_push_param_oom");
@@ -1069,6 +1361,15 @@ int main(void) {
 
     test_nested_many_break_skips_outer_tail();
     puts("ok: test_nested_many_break_skips_outer_tail");
+
+    test_push_global_assigns_value();
+    puts("ok: test_push_global_assigns_value");
+
+    test_compiled_function_call();
+    puts("ok: test_compiled_function_call");
+
+    test_native_call_from_global();
+    puts("ok: test_native_call_from_global");
 
     puts("all vm/ir tests passed");
     return 0;

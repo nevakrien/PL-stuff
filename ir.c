@@ -66,6 +66,11 @@ static bool type_layout_one(TypeS types,type_idx tid,TypeLayoutState* states){
 		type->payload_size = align_up(offset,max_align);
 		break;
 	}
+
+	case TYPE_NATIVE_FUNC_POINTER:
+		type->payload_size = sizeof(void*);
+		type->align = alignof(void*);
+		break;
 	}
 
 	type->size = align_up(type->payload_size,CELL_ALIGN);

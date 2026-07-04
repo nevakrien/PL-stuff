@@ -29,12 +29,15 @@ typedef enum ByteCode : char {
 	B_POP_CRASH,
 	B_CRASH,
 	B_HARD_CRASH,
+	B_PUSH_GLOBAL,
 	B_CALL,
+	B_CALL_NATIVE,
 
 	//numeric buildins
 } ByteCode;
 
 typedef SLICE(ByteCode) VmCode;
+typedef STACK(VmCode) VmFuncS;
 
 typedef struct CrashFrame {
 	const ByteCode* pc;
@@ -57,8 +60,15 @@ typedef enum VM_RESULT {
 	VM_OOM_CRASH,
 } VM_RESULT;
 
+typedef VM_RESULT (*VmNativeFunc)(VM*);
 
-VmCode vm_compile_no_defers(const Func* func);
+typedef struct CompileContext {
+	GlobalS globals;
+	Funcs funcs;
+	VmFuncS code;//code is malloced
+} CompileContext;
+
+VmCode vm_compile_no_defers(const Func* func,CompileContext* ctx);//note func may not be from funcs.
 VM_RESULT vm_run(VM* vm,const ByteCode* code);
 
 static inline VM_RESULT vm_push_param(VM* vm, void* param){
