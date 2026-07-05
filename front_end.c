@@ -180,6 +180,21 @@ static bool par_is_portal(CompileContext* ctx,const Func* func,par_idx idx){
 	return type_idx_valid(func->types,tid) && func->types.data[tid].is_portal;
 }
 
+static bool par_has_type(CompileContext* ctx,const Func* func,par_idx idx,type_idx want){
+	type_idx got = par_type(ctx,func,idx);
+	return type_idx_valid(func->types,got) && got == want;
+}
+
+static bool par_is_int(CompileContext* ctx,const Func* func,par_idx idx){
+	return par_has_type(ctx,func,idx,TYPE_INT_ID);
+}
+
+static bool type_is_array_of(TypeS types,type_idx tid,type_idx elem){
+	return type_idx_valid(types,tid)
+		&& types.data[tid].kind == TYPE_ARRAY
+		&& types.data[tid].data.array.elem == elem;
+}
+
 static const Sig* native_sig_on_stack(CompileContext* ctx,const Func* func){
 	if(ctx->pars.len < 1) return NULL;
 	type_idx tid = par_type(ctx,func,TOP(ctx->pars));
@@ -187,6 +202,168 @@ static const Sig* native_sig_on_stack(CompileContext* ctx,const Func* func){
 	Type* type = &func->types.data[tid];
 	if(type->kind != TYPE_NATIVE_FUNC_POINTER) return NULL;
 	return &type->data.sig;
+}
+
+typedef struct TypeCheckCtx {
+	TypeCheckErrorReporter reporter;
+	void* user;
+} TypeCheckCtx;
+
+static int report_type_check(TypeCheckCtx* t,CompileContext* ctx,TypeCheckError error){
+	if(!t->reporter) return 1;
+	return t->reporter(t->user,ctx,error);
+}
+
+static int report_stack_underflow(TypeCheckCtx* t,CompileContext* ctx,OP op,CodeLoc loc,count_t needed,count_t actual){
+	return report_type_check(t,ctx,(TypeCheckError){
+		.kind = TYPE_CHECK_ERROR_STACK_UNDERFLOW,
+		.loc = loc,
+		.op = op,
+		.data.stack = {.needed = needed,.actual = actual},
+	});
+}
+
+static int report_index_error(TypeCheckCtx* t,CompileContext* ctx,TypeCheckErrorKind kind,OP op,CodeLoc loc,count_t idx,count_t len){
+	return report_type_check(t,ctx,(TypeCheckError){
+		.kind = kind,
+		.loc = loc,
+		.op = op,
+		.data.index = {.idx = idx,.len = len},
+	});
+}
+
+static int report_type_error(TypeCheckCtx* t,CompileContext* ctx,TypeCheckErrorKind kind,OP op,CodeLoc loc,par_idx par,type_idx expected,type_idx actual){
+	return report_type_check(t,ctx,(TypeCheckError){
+		.kind = kind,
+		.loc = loc,
+		.op = op,
+		.data.type = {.par = par,.expected = expected,.actual = actual},
+	});
+}
+
+static int type_check_sig(TypeCheckCtx* t,CompileContext* ctx,const Func* caller,const Sig* sig,size_t base,OP op,CodeLoc loc){
+	if(ctx->pars.len < base + sig->outs.len + sig->ins.len) return report_stack_underflow(t,ctx,op,loc,(count_t)(base + sig->outs.len + sig->ins.len),(count_t)ctx->pars.len);
+
+	for(count_t i = 0;i < sig->outs.len;i++){
+		type_idx want = sig->outs.data[i].tid;
+		par_idx par = ctx->pars.data[base + i];
+		type_idx got = par_type(ctx,caller,par);
+		if(!type_idx_valid(caller->types,want)) return report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_TYPE,op,loc,par,want,got);
+		if(got != want) return report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_CALL,op,loc,par,want,got);
+	}
+	for(count_t i = 0;i < sig->ins.len;i++){
+		type_idx want = sig->ins.data[i].var.tid;
+		par_idx par = ctx->pars.data[base + sig->outs.len + i];
+		type_idx got = par_type(ctx,caller,par);
+		if(!type_idx_valid(caller->types,want)) return report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_TYPE,op,loc,par,want,got);
+		if(got != want) return report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_CALL,op,loc,par,want,got);
+	}
+	return 0;
+}
+
+static int type_check_op(TypeCheckCtx* t,CompileContext* ctx,const Func* func,OP op,CodeLoc loc){
+	switch(op.kind){
+	case OP_NULL:
+	case OP_DROP:
+		return 0;
+	case OP_PUSH_VAR:
+	case OP_PUSH_ARG:
+		if(op.extra >= func->vars.len) return report_index_error(t,ctx,TYPE_CHECK_ERROR_INVALID_LOCAL,op,loc,op.extra,(count_t)func->vars.len);
+		if(!type_idx_valid(func->types,func->vars.data[op.extra].tid)) return report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_TYPE,op,loc,PAR_IDX_INVALID,func->vars.data[op.extra].tid,TYPE_INVALID_ID);
+		return 0;
+	case OP_PUSH_GLOBAL:
+		if(op.extra >= ctx->globals.len) return report_index_error(t,ctx,TYPE_CHECK_ERROR_INVALID_GLOBAL,op,loc,op.extra,(count_t)ctx->globals.len);
+		if(!type_idx_valid(func->types,ctx->globals.data[op.extra].var.tid)) return report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_TYPE,op,loc,PAR_IDX_INVALID,ctx->globals.data[op.extra].var.tid,TYPE_INVALID_ID);
+		return 0;
+	case OP_ASSIGN:
+	case OP_ADD_ASSIGN:
+	case OP_SUB_ASSIGN:
+	case OP_MUL_ASSIGN:
+	case OP_DIV_ASSIGN:
+	case OP_AND_ASSIGN:
+	case OP_OR_ASSIGN:
+	case OP_XOR_ASSIGN: {
+		if(ctx->pars.len < 2) return report_stack_underflow(t,ctx,op,loc,2,(count_t)ctx->pars.len);
+		par_idx dst = ctx->pars.data[ctx->pars.len - 2];
+		par_idx src = ctx->pars.data[ctx->pars.len - 1];
+		type_idx dst_tid = par_type(ctx,func,dst);
+		type_idx src_tid = par_type(ctx,func,src);
+		if(!type_idx_valid(func->types,dst_tid)) return report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_TYPE,op,loc,dst,dst_tid,dst_tid);
+		if(dst_tid != src_tid) return report_type_error(t,ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH,op,loc,src,dst_tid,src_tid);
+		if(op.kind != OP_ASSIGN && dst_tid != TYPE_INT_ID) return report_type_error(t,ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH,op,loc,dst,TYPE_INT_ID,dst_tid);
+		return 0;
+	}
+	case OP_BIT_NOT_ASSIGN:
+		if(ctx->pars.len < 1) return report_stack_underflow(t,ctx,op,loc,1,(count_t)ctx->pars.len);
+		return par_is_int(ctx,func,TOP(ctx->pars)) ? 0 : report_type_error(t,ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH,op,loc,TOP(ctx->pars),TYPE_INT_ID,par_type(ctx,func,TOP(ctx->pars)));
+	case OP_ARR_PUSH: {
+		if(ctx->pars.len < 2) return report_stack_underflow(t,ctx,op,loc,2,(count_t)ctx->pars.len);
+		par_idx arr = ctx->pars.data[ctx->pars.len - 2];
+		par_idx elem = ctx->pars.data[ctx->pars.len - 1];
+		type_idx arr_tid = par_type(ctx,func,ctx->pars.data[ctx->pars.len - 2]);
+		type_idx elem_tid = par_type(ctx,func,ctx->pars.data[ctx->pars.len - 1]);
+		if(!type_idx_valid(func->types,arr_tid) || func->types.data[arr_tid].kind != TYPE_ARRAY) return report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_INDEX,op,loc,arr,TYPE_INVALID_ID,arr_tid);
+		return func->types.data[arr_tid].data.array.elem == elem_tid ? 0 : report_type_error(t,ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH,op,loc,elem,func->types.data[arr_tid].data.array.elem,elem_tid);
+	}
+	case OP_ARR_DROP: {
+		if(ctx->pars.len < 2) return report_stack_underflow(t,ctx,op,loc,2,(count_t)ctx->pars.len);
+		if(!par_is_int(ctx,func,ctx->pars.data[ctx->pars.len - 1])) return report_type_error(t,ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH,op,loc,ctx->pars.data[ctx->pars.len - 1],TYPE_INT_ID,par_type(ctx,func,ctx->pars.data[ctx->pars.len - 1]));
+		type_idx arr_tid = par_type(ctx,func,ctx->pars.data[ctx->pars.len - 2]);
+		return type_idx_valid(func->types,arr_tid) && func->types.data[arr_tid].kind == TYPE_ARRAY ? 0 : report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_INDEX,op,loc,ctx->pars.data[ctx->pars.len - 2],TYPE_INVALID_ID,arr_tid);
+	}
+	case OP_SLICE_FROM_AR: {
+		if(ctx->pars.len < 2) return report_stack_underflow(t,ctx,op,loc,2,(count_t)ctx->pars.len);
+		type_idx ref_tid = par_type(ctx,func,ctx->pars.data[ctx->pars.len - 2]);
+		type_idx arr_tid = par_type(ctx,func,ctx->pars.data[ctx->pars.len - 1]);
+		if(!type_idx_valid(func->types,ref_tid)) return report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_TYPE,op,loc,ctx->pars.data[ctx->pars.len - 2],ref_tid,ref_tid);
+		if(!type_idx_valid(func->types,arr_tid)) return report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_TYPE,op,loc,ctx->pars.data[ctx->pars.len - 1],arr_tid,arr_tid);
+		if(func->types.data[ref_tid].kind != TYPE_SLICE && func->types.data[ref_tid].kind != TYPE_VIEW) return report_type_error(t,ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH,op,loc,ctx->pars.data[ctx->pars.len - 2],TYPE_INVALID_ID,ref_tid);
+		return type_is_array_of(func->types,arr_tid,func->types.data[ref_tid].data.ref.elem) ? 0 : report_type_error(t,ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH,op,loc,ctx->pars.data[ctx->pars.len - 1],func->types.data[ref_tid].data.ref.elem,arr_tid);
+	}
+	case OP_SLICE_INC:
+	case OP_SLICE_DEC:
+		if(ctx->pars.len < 2) return report_stack_underflow(t,ctx,op,loc,2,(count_t)ctx->pars.len);
+		if(!par_is_int(ctx,func,TOP(ctx->pars))) return report_type_error(t,ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH,op,loc,TOP(ctx->pars),TYPE_INT_ID,par_type(ctx,func,TOP(ctx->pars)));
+		{
+			type_idx ref_tid = par_type(ctx,func,ctx->pars.data[ctx->pars.len - 2]);
+			return type_idx_valid(func->types,ref_tid)
+				&& func->types.data[ref_tid].kind == TYPE_SLICE ? 0 : report_type_error(t,ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH,op,loc,ctx->pars.data[ctx->pars.len - 2],TYPE_INVALID_ID,ref_tid);
+		}
+	case OP_ARR_AT: {
+		if(ctx->pars.len < 2) return report_stack_underflow(t,ctx,op,loc,2,(count_t)ctx->pars.len);
+		if(!par_is_int(ctx,func,ctx->pars.data[ctx->pars.len - 1])) return report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_INDEX,op,loc,ctx->pars.data[ctx->pars.len - 1],TYPE_INT_ID,par_type(ctx,func,ctx->pars.data[ctx->pars.len - 1]));
+		type_idx arr_tid = par_type(ctx,func,ctx->pars.data[ctx->pars.len - 2]);
+		return type_idx_valid(func->types,arr_tid) && func->types.data[arr_tid].kind == TYPE_ARRAY ? 0 : report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_INDEX,op,loc,ctx->pars.data[ctx->pars.len - 2],TYPE_INVALID_ID,arr_tid);
+	}
+	case OP_SLICE_AT: {
+		if(ctx->pars.len < 2) return report_stack_underflow(t,ctx,op,loc,2,(count_t)ctx->pars.len);
+		if(!par_is_int(ctx,func,ctx->pars.data[ctx->pars.len - 1])) return report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_INDEX,op,loc,ctx->pars.data[ctx->pars.len - 1],TYPE_INT_ID,par_type(ctx,func,ctx->pars.data[ctx->pars.len - 1]));
+		type_idx ref_tid = par_type(ctx,func,ctx->pars.data[ctx->pars.len - 2]);
+		return type_idx_valid(func->types,ref_tid)
+			&& (func->types.data[ref_tid].kind == TYPE_SLICE || func->types.data[ref_tid].kind == TYPE_VIEW) ? 0 : report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_INDEX,op,loc,ctx->pars.data[ctx->pars.len - 2],TYPE_INVALID_ID,ref_tid);
+	}
+	case OP_STRUCT_AT: {
+		if(ctx->pars.len < 1) return report_stack_underflow(t,ctx,op,loc,1,(count_t)ctx->pars.len);
+		type_idx parent_tid = par_type(ctx,func,TOP(ctx->pars));
+		if(!type_idx_valid(func->types,parent_tid) || func->types.data[parent_tid].kind != TYPE_STRUCT) return report_type_error(t,ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH,op,loc,TOP(ctx->pars),TYPE_INVALID_ID,parent_tid);
+		return op.extra < func->types.data[parent_tid].data.fields.len ? 0 : report_index_error(t,ctx,TYPE_CHECK_ERROR_INVALID_FIELD,op,loc,op.extra,(count_t)func->types.data[parent_tid].data.fields.len);
+	}
+	case OP_CALL: {
+		if(op.extra >= ctx->funcs.len) return report_index_error(t,ctx,TYPE_CHECK_ERROR_INVALID_FUNC,op,loc,op.extra,(count_t)ctx->funcs.len);
+		Func* callee = &ctx->funcs.data[op.extra];
+		count_t argc = (count_t)(callee->sig.outs.len + callee->sig.ins.len);
+		if(ctx->pars.len < argc) return report_stack_underflow(t,ctx,op,loc,argc,(count_t)ctx->pars.len);
+		return type_check_sig(t,ctx,func,&callee->sig,ctx->pars.len - argc,op,loc);
+	}
+	case OP_CALL_NATIVE_ON_STACK: {
+		const Sig* sig = native_sig_on_stack(ctx,func);
+		if(!sig) return report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_CALL_TARGET,op,loc,ctx->pars.len ? TOP(ctx->pars) : PAR_IDX_INVALID,TYPE_INVALID_ID,ctx->pars.len ? par_type(ctx,func,TOP(ctx->pars)) : TYPE_INVALID_ID);
+		count_t argc = (count_t)(sig->outs.len + sig->ins.len);
+		if(ctx->pars.len < argc + 1) return report_stack_underflow(t,ctx,op,loc,argc + 1,(count_t)ctx->pars.len);
+		return type_check_sig(t,ctx,func,sig,ctx->pars.len - argc - 1,op,loc);
+	}
+	}
+	return report_type_check(t,ctx,(TypeCheckError){.kind = TYPE_CHECK_ERROR_INVALID_TYPE,.loc = loc,.op = op});
 }
 
 static bool portal_retargetable(CompileContext* ctx,const Func* func,par_idx idx){
@@ -400,30 +577,24 @@ int comp_run_calls(CompileContext* ctx,ProcessCall f,void* user){
 	return scan_funcs(ctx,call_adapter,&adapter);
 }
 
-typedef struct PortalCtx {
-	PortalErrorReporter reporter;
-	void* user;
-} PortalCtx;
-
-static int report_portal(PortalCtx* p,CompileContext* ctx,PortalErrorKind kind,par_idx portal,par_idx backing,CodeLoc loc){
-	if(!p->reporter) return 1;
-	return p->reporter(p->user,ctx,(PortalError){
+static int report_portal(TypeCheckCtx* p,CompileContext* ctx,TypeCheckErrorKind kind,par_idx portal,par_idx backing,CodeLoc loc,OP op){
+	return report_type_check(p,ctx,(TypeCheckError){
 		.kind = kind,
-		.portal = portal,
-		.backing = backing,
 		.loc = loc,
+		.op = op,
+		.data.portal = {.portal = portal,.backing = backing},
 	});
 }
 
-static int check_portal_region(PortalCtx* p,CompileContext* ctx,const Func* func,const ScanState* state,par_idx portal,par_idx backing,CodeLoc loc){
-	if(!portal_retargetable(ctx,func,portal)) return report_portal(p,ctx,PORTAL_ERROR_NON_LOCAL,portal,backing,loc);
+static int check_portal_region(TypeCheckCtx* p,CompileContext* ctx,const Func* func,const ScanState* state,par_idx portal,par_idx backing,CodeLoc loc,OP op){
+	if(!portal_retargetable(ctx,func,portal)) return report_portal(p,ctx,TYPE_CHECK_ERROR_PORTAL_NON_LOCAL,portal,backing,loc,op);
 	if(par_scope_depth(ctx,func,state,backing) > par_scope_depth(ctx,func,state,portal)){
-		return report_portal(p,ctx,PORTAL_ERROR_BACKING_SCOPE,portal,backing,loc);
+		return report_portal(p,ctx,TYPE_CHECK_ERROR_PORTAL_BACKING_SCOPE,portal,backing,loc,op);
 	}
 	return 0;
 }
 
-static int gather_portal_regions_op(
+static int type_check_first_pass_op(
 	void* user,
 	CompileContext* ctx,
 	const ScanState* state,
@@ -431,8 +602,9 @@ static int gather_portal_regions_op(
 	OP op,
 	CodeLoc loc
 ){
-	PortalCtx* p = user;
+	TypeCheckCtx* p = user;
 	Func* func = &ctx->funcs.data[current];
+	if(type_check_op(p,ctx,func,op,loc)) return 1;
 
 	if(op.kind == OP_SLICE_FROM_AR){
 		if(ctx->pars.len < 2) return 1;
@@ -446,7 +618,7 @@ static int gather_portal_regions_op(
 		Type ref_type = func->types.data[ref_tid];
 		if(ref_type.kind != TYPE_SLICE && ref_type.kind != TYPE_VIEW) return 1;
 
-		int r = check_portal_region(p, ctx, func, state, ref, arr, loc);
+		int r = check_portal_region(p, ctx, func, state, ref, arr, loc, op);
 		if(r) return r;
 
 		/*
@@ -470,10 +642,11 @@ static int gather_portal_regions_op(
 			return report_portal(
 				p,
 				ctx,
-				PORTAL_ERROR_NON_LOCAL,
+				TYPE_CHECK_ERROR_PORTAL_NON_LOCAL,
 				dst,
 				src,
-				loc
+				loc,
+				op
 			);
 		}
 
@@ -490,7 +663,7 @@ static int gather_portal_regions_op(
 			This preserves the fact that dst depends on src as a portal object.
 		*/
 		if(par_is_portal(ctx, func, src)){
-			int r = check_portal_region(p, ctx, func, state, dst, src, loc);
+			int r = check_portal_region(p, ctx, func, state, dst, src, loc, op);
 			if(r) return r;
 
 			return handle_add_hold(ctx, dst, src, loc, false) ? 0 : 1;
@@ -507,14 +680,14 @@ static int gather_portal_regions_op(
 	return 0;
 }
 
-int gather_portal_regions(PortalErrorReporter reporter,CompileContext* ctx){
+int type_check_first_pass(TypeCheckErrorReporter reporter,CompileContext* ctx){
 	ctx->holds.len = 0;
 	for(size_t i = 0;i < ctx->handles.len;i++){
 		ctx->handles.data[i].holds_start = 0;
 		ctx->handles.data[i].num_holds = 0;
 	}
-	PortalCtx p = {.reporter = reporter};
-	return scan_funcs(ctx,gather_portal_regions_op,&p);
+	TypeCheckCtx p = {.reporter = reporter};
+	return scan_funcs(ctx,type_check_first_pass_op,&p);
 }
 
 typedef struct BorrowCtx {
@@ -630,7 +803,7 @@ static int borrow_check_call(void* user,CompileContext* ctx,const ScanState* sta
 }
 
 int borrow_check(AliasErrorReporter reporter,CompileContext* ctx){
-	int r = gather_portal_regions(NULL,ctx);
+	int r = type_check_first_pass(NULL,ctx);
 	if(r) return r;
 	BorrowCtx b = {.reporter = reporter,.user = NULL,.first_mut = PAR_IDX_INVALID};
 	return scan_funcs(ctx,borrow_check_call,&b);

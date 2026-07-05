@@ -63,20 +63,29 @@ static CompileContext make_ctx(Func* funcs,size_t len){
 	};
 }
 
-typedef struct PortalReport {
+typedef struct TypeCheckReport {
 	count_t count;
-	PortalError last;
-} PortalReport;
+	TypeCheckError last;
+} TypeCheckReport;
 
-static PortalReport* active_portal_report;
+static TypeCheckReport* active_type_check_report;
 
-static int portal_reporter(void* user,CompileContext* ctx,const PortalError error){
+static int type_check_reporter(void* user,CompileContext* ctx,const TypeCheckError error){
 	(void)user;
 	(void)ctx;
-	PortalReport* report = active_portal_report;
+	TypeCheckReport* report = active_type_check_report;
 	report->count++;
 	report->last = error;
 	return 1;
+}
+
+static void expect_first_pass_error(CompileContext* ctx,TypeCheckErrorKind kind){
+	TypeCheckReport report = {0};
+	active_type_check_report = &report;
+	assert(type_check_first_pass(type_check_reporter,ctx) == 1);
+	active_type_check_report = NULL;
+	assert(report.count == 1);
+	assert(report.last.kind == kind);
 }
 
 static Block one_basic(size_t len){
@@ -123,7 +132,7 @@ static void test_local_portal_assign_allowed(void){
 	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
 	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 3},.vars = {.data = vars,.len = 2}}};
 	CompileContext ctx = make_ctx(funcs,1);
-	assert(gather_portal_regions(NULL,&ctx) == 0);
+	assert(type_check_first_pass(NULL,&ctx) == 0);
 }
 
 static void test_non_local_slice_retarget_reported(void){
@@ -140,12 +149,7 @@ static void test_non_local_slice_retarget_reported(void){
 	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
 	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 3},.vars = {.data = vars,.len = 2}}};
 	CompileContext ctx = make_ctx(funcs,1);
-	PortalReport report = {0};
-	active_portal_report = &report;
-	assert(gather_portal_regions(portal_reporter,&ctx) == 1);
-	active_portal_report = NULL;
-	assert(report.count == 1);
-	assert(report.last.kind == PORTAL_ERROR_NON_LOCAL);
+	expect_first_pass_error(&ctx,TYPE_CHECK_ERROR_PORTAL_NON_LOCAL);
 }
 
 static void test_local_struct_containing_portal_assign_allowed(void){
@@ -162,7 +166,7 @@ static void test_local_struct_containing_portal_assign_allowed(void){
 	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
 	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 3},.vars = {.data = vars,.len = 2}}};
 	CompileContext ctx = make_ctx(funcs,1);
-	assert(gather_portal_regions(NULL,&ctx) == 0);
+	assert(type_check_first_pass(NULL,&ctx) == 0);
 }
 
 static void test_portal_backing_scope_reported(void){
@@ -183,12 +187,7 @@ static void test_portal_backing_scope_reported(void){
 	};
 	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 3},.ops = {.data = ops,.len = 3},.vars = {.data = vars,.len = 2}}};
 	CompileContext ctx = make_ctx(funcs,1);
-	PortalReport report = {0};
-	active_portal_report = &report;
-	assert(gather_portal_regions(portal_reporter,&ctx) == 1);
-	active_portal_report = NULL;
-	assert(report.count == 1);
-	assert(report.last.kind == PORTAL_ERROR_BACKING_SCOPE);
+	expect_first_pass_error(&ctx,TYPE_CHECK_ERROR_PORTAL_BACKING_SCOPE);
 }
 
 static void test_mut_portal_input_rejected(void){
@@ -295,6 +294,126 @@ static void test_native_output_feeds_function_borrow_checked(void){
 	assert(borrow_check(NULL,&ctx) == 0);
 }
 
+static void test_call_type_mismatch_rejected_in_first_pass(void){
+	TypeS types = fresh_types();
+	Var vars[] = {{.name = "s", .tid = TYPE_INT_SLICE_ID}};
+	SigInput callee_ins[] = {{.var = {.name = "x", .tid = TYPE_INT_ID}}};
+	OP ops[] = {
+		{.kind = OP_PUSH_VAR,.extra = 0},
+		{.kind = OP_CALL,.extra = 1},
+	};
+	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
+	Func funcs[] = {
+		{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 2},.vars = {.data = vars,.len = 1}},
+		{.name = "callee",.types = types,.sig.ins = {.data = callee_ins,.len = 1}},
+	};
+	CompileContext ctx = make_ctx(funcs,2);
+	expect_first_pass_error(&ctx,TYPE_CHECK_ERROR_INVALID_CALL);
+}
+
+static void test_bad_index_position_rejected_in_first_pass(void){
+	TypeS types = fresh_types();
+	Var vars[] = {
+		{.name = "a", .tid = TYPE_INT_ARRAY4_ID},
+		{.name = "s", .tid = TYPE_INT_SLICE_ID},
+	};
+	OP ops[] = {
+		{.kind = OP_PUSH_VAR,.extra = 0},
+		{.kind = OP_PUSH_VAR,.extra = 1},
+		{.kind = OP_ARR_AT},
+	};
+	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
+	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 3},.vars = {.data = vars,.len = 2}}};
+	CompileContext ctx = make_ctx(funcs,1);
+	expect_first_pass_error(&ctx,TYPE_CHECK_ERROR_INVALID_INDEX);
+}
+
+static void test_struct_field_out_of_range_rejected_in_first_pass(void){
+	TypeS types = fresh_types();
+	Var vars[] = {{.name = "p", .tid = TYPE_PAIR_ID}};
+	OP ops[] = {
+		{.kind = OP_PUSH_VAR,.extra = 0},
+		{.kind = OP_STRUCT_AT,.extra = 2},
+	};
+	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
+	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 2},.vars = {.data = vars,.len = 1}}};
+	CompileContext ctx = make_ctx(funcs,1);
+	expect_first_pass_error(&ctx,TYPE_CHECK_ERROR_INVALID_FIELD);
+}
+
+static void test_native_call_type_mismatch_rejected_in_first_pass(void){
+	TypeS types = fresh_types();
+	Var vars[] = {
+		{.name = "s", .tid = TYPE_INT_SLICE_ID},
+		{.name = "x", .tid = TYPE_INT_ID},
+	};
+	Global globals[] = {{.var = {.name = "native", .tid = TYPE_NATIVE_CONFLICT_ID}}};
+	OP ops[] = {
+		{.kind = OP_PUSH_VAR,.extra = 0},
+		{.kind = OP_PUSH_VAR,.extra = 1},
+		{.kind = OP_PUSH_GLOBAL,.extra = 0},
+		{.kind = OP_CALL_NATIVE_ON_STACK},
+	};
+	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
+	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 4},.vars = {.data = vars,.len = 2}}};
+	CompileContext ctx = make_ctx(funcs,1);
+	ctx.globals = (GlobalS){.data = globals,.len = 1,.cap = 1};
+	expect_first_pass_error(&ctx,TYPE_CHECK_ERROR_INVALID_CALL);
+}
+
+static void test_slice_from_wrong_array_type_rejected_in_first_pass(void){
+	TypeS types = fresh_types();
+	Var vars[] = {
+		{.name = "s", .tid = TYPE_INT_SLICE_ID},
+		{.name = "arrays", .tid = TYPE_SLICE_ARRAY_ID},
+	};
+	OP ops[] = {
+		{.kind = OP_PUSH_VAR,.extra = 0},
+		{.kind = OP_PUSH_VAR,.extra = 1},
+		{.kind = OP_SLICE_FROM_AR},
+	};
+	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
+	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 3},.vars = {.data = vars,.len = 2}}};
+	CompileContext ctx = make_ctx(funcs,1);
+	expect_first_pass_error(&ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH);
+}
+
+static void test_stack_underflow_rejected_in_first_pass(void){
+	TypeS types = fresh_types();
+	OP ops[] = {{.kind = OP_ASSIGN}};
+	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
+	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 1}}};
+	CompileContext ctx = make_ctx(funcs,1);
+	expect_first_pass_error(&ctx,TYPE_CHECK_ERROR_STACK_UNDERFLOW);
+}
+
+static void test_invalid_local_rejected_in_first_pass(void){
+	TypeS types = fresh_types();
+	OP ops[] = {{.kind = OP_PUSH_VAR,.extra = 0}};
+	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
+	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 1}}};
+	CompileContext ctx = make_ctx(funcs,1);
+	expect_first_pass_error(&ctx,TYPE_CHECK_ERROR_INVALID_LOCAL);
+}
+
+static void test_invalid_global_rejected_in_first_pass(void){
+	TypeS types = fresh_types();
+	OP ops[] = {{.kind = OP_PUSH_GLOBAL,.extra = 0}};
+	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
+	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 1}}};
+	CompileContext ctx = make_ctx(funcs,1);
+	expect_first_pass_error(&ctx,TYPE_CHECK_ERROR_INVALID_GLOBAL);
+}
+
+static void test_invalid_func_rejected_in_first_pass(void){
+	TypeS types = fresh_types();
+	OP ops[] = {{.kind = OP_CALL,.extra = 1}};
+	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
+	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 1}}};
+	CompileContext ctx = make_ctx(funcs,1);
+	expect_first_pass_error(&ctx,TYPE_CHECK_ERROR_INVALID_FUNC);
+}
+
 int main(void){
 	test_recursive_portal_types();
 	puts("ok: test_recursive_portal_types");
@@ -318,6 +437,24 @@ int main(void){
 	puts("ok: test_native_signature_borrow_checked");
 	test_native_output_feeds_function_borrow_checked();
 	puts("ok: test_native_output_feeds_function_borrow_checked");
+	test_call_type_mismatch_rejected_in_first_pass();
+	puts("ok: test_call_type_mismatch_rejected_in_first_pass");
+	test_bad_index_position_rejected_in_first_pass();
+	puts("ok: test_bad_index_position_rejected_in_first_pass");
+	test_struct_field_out_of_range_rejected_in_first_pass();
+	puts("ok: test_struct_field_out_of_range_rejected_in_first_pass");
+	test_native_call_type_mismatch_rejected_in_first_pass();
+	puts("ok: test_native_call_type_mismatch_rejected_in_first_pass");
+	test_slice_from_wrong_array_type_rejected_in_first_pass();
+	puts("ok: test_slice_from_wrong_array_type_rejected_in_first_pass");
+	test_stack_underflow_rejected_in_first_pass();
+	puts("ok: test_stack_underflow_rejected_in_first_pass");
+	test_invalid_local_rejected_in_first_pass();
+	puts("ok: test_invalid_local_rejected_in_first_pass");
+	test_invalid_global_rejected_in_first_pass();
+	puts("ok: test_invalid_global_rejected_in_first_pass");
+	test_invalid_func_rejected_in_first_pass();
+	puts("ok: test_invalid_func_rejected_in_first_pass");
 	puts("all frontend tests passed");
 	return 0;
 }
