@@ -199,7 +199,7 @@ static void test_basic_external_assign(void) {
                 .data = outs,
                 .len = 1,
             },
-            .can_crash = false,
+            
         },
 
         .types = test_type_slice(),
@@ -353,7 +353,7 @@ static void test_crash_pad_writes_y1_but_not_y2_after_crash(void) {
                 .data = outs,
                 .len = 2,
             },
-            .can_crash = true,
+            
         },
 
         .types = test_type_slice(),
@@ -494,7 +494,7 @@ static void test_crash_pad_body_runs_normally_without_crash(void) {
                 .data = outs,
                 .len = 2,
             },
-            .can_crash = true,
+            
         },
 
         .types = test_type_slice(),
@@ -561,7 +561,7 @@ static void test_uncaught_crash_returns_vm_crash(void) {
                 .data = NULL,
                 .len = 0,
             },
-            .can_crash = true,
+            
         },
 
         .types = test_type_slice(),
@@ -613,7 +613,7 @@ static void test_hard_crash_returns_vm_hard_crash(void) {
         .sig = {
             .ins = {.data = NULL, .len = 0},
             .outs = {.data = NULL, .len = 0},
-            .can_crash = true,
+            
         },
         .types = test_type_slice(),
         .blocks = {.data = blocks, .len = BLOCK_COUNT},
@@ -701,7 +701,7 @@ static void test_array_crashes_unwind_stack(void) {
         .sig = {
             .ins = {.data = ins, .len = 3},
             .outs = {.data = outs, .len = 1},
-            .can_crash = true,
+            
         },
         .types = test_type_slice(),
         .blocks = {.data = bounds_blocks, .len = BOUNDS_BLOCK_COUNT},
@@ -775,7 +775,7 @@ static void test_array_crashes_unwind_stack(void) {
         .sig = {
             .ins = {.data = ins, .len = 3},
             .outs = {.data = outs, .len = 1},
-            .can_crash = true,
+            
         },
         .types = test_type_slice(),
         .blocks = {.data = cap_blocks, .len = CAP_BLOCK_COUNT},
@@ -853,7 +853,7 @@ static void test_array_crashes_unwind_stack(void) {
         .sig = {
             .ins = {.data = ins, .len = 3},
             .outs = {.data = outs, .len = 1},
-            .can_crash = true,
+            
         },
         .types = test_type_slice(),
         .blocks = {.data = drop_blocks, .len = DROP_BLOCK_COUNT},
@@ -1012,7 +1012,7 @@ static void test_array_push_at_and_drop(void) {
         .sig = {
             .ins = {.data = ins, .len = 6},
             .outs = {.data = outs, .len = 2},
-            .can_crash = false,
+            
         },
         .types = test_type_slice(),
         .blocks = {.data = blocks, .len = BLOCK_COUNT},
@@ -1142,7 +1142,7 @@ static void test_slice_from_array_at_inc_and_dec(void) {
         .sig = {
             .ins = {.data = ins, .len = 3},
             .outs = {.data = outs, .len = 2},
-            .can_crash = false,
+            
         },
         .types = test_type_slice(),
         .blocks = {.data = blocks, .len = BLOCK_COUNT},
@@ -1239,7 +1239,7 @@ static void test_view_rejects_slice_mutation(void) {
         .sig = {
             .ins = {.data = ins, .len = 1},
             .outs = {.data = outs, .len = 1},
-            .can_crash = false,
+            
         },
         .types = test_type_slice(),
         .blocks = {.data = blocks, .len = BLOCK_COUNT},
@@ -1377,7 +1377,7 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
         .sig = {
             .ins = {.data = ins, .len = 3},
             .outs = {.data = outs, .len = 2},
-            .can_crash = false,
+            
         },
         .types = test_type_slice(),
         .blocks = {.data = blocks, .len = BLOCK_COUNT},
@@ -1527,7 +1527,7 @@ static void test_nested_many_break_skips_outer_tail(void) {
         .sig = {
             .ins = {.data = ins, .len = 4},
             .outs = {.data = outs, .len = 1},
-            .can_crash = false,
+            
         },
         .types = test_type_slice(),
         .blocks = {.data = blocks, .len = BLOCK_COUNT},
@@ -1615,7 +1615,7 @@ static void test_push_global_assigns_value(void) {
         .sig = {
             .ins = {.data = NULL, .len = 0},
             .outs = {.data = outs, .len = 1},
-            .can_crash = false,
+            
         },
         .types = test_type_slice(),
         .blocks = {.data = blocks, .len = BLOCK_COUNT},
@@ -1701,7 +1701,7 @@ static void test_compiled_function_call(void) {
             .sig = {
                 .ins = {.data = ins, .len = 1},
                 .outs = {.data = outs, .len = 1},
-                .can_crash = false,
+                
             },
             .types = test_type_slice(),
             .blocks = {.data = blocks, .len = BLOCK_COUNT},
@@ -1715,7 +1715,7 @@ static void test_compiled_function_call(void) {
         .sig = {
             .ins = {.data = ins, .len = 1},
             .outs = {.data = outs, .len = 1},
-            .can_crash = false,
+            
         },
         .types = test_type_slice(),
         .blocks = {.data = blocks, .len = BLOCK_COUNT},
@@ -1839,7 +1839,7 @@ static void test_callee_crash_unwinds_to_caller_pad(void) {
             .sig = {
                 .ins = {.data = callee_ins, .len = 1},
                 .outs = {.data = NULL, .len = 0},
-                .can_crash = true,
+                
             },
             .types = test_type_slice(),
             .blocks = {.data = callee_blocks, .len = CALLEE_BLOCK_COUNT},
@@ -1853,7 +1853,7 @@ static void test_callee_crash_unwinds_to_caller_pad(void) {
         .sig = {
             .ins = {.data = caller_ins, .len = 2},
             .outs = {.data = caller_outs, .len = 1},
-            .can_crash = true,
+            
         },
         .types = test_type_slice(),
         .blocks = {.data = caller_blocks, .len = CALLER_BLOCK_COUNT},
@@ -1959,7 +1959,7 @@ static void test_native_call_from_global(void) {
         .sig = {
             .ins = {.data = NULL, .len = 0},
             .outs = {.data = outs, .len = 1},
-            .can_crash = false,
+            
         },
         .types = test_type_slice(),
         .blocks = {.data = blocks, .len = BLOCK_COUNT},

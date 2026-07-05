@@ -200,8 +200,6 @@ typedef SLICE(OP) OPS;
 typedef struct Sig {
     SLICE(SigInput) ins;
     SLICE(Var) outs;
-
-    bool can_crash;
 } Sig;
 
 //this is a tree stored as a flat DAG 
