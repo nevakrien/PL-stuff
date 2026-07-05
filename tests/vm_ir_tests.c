@@ -1946,6 +1946,7 @@ static void test_native_call_from_global(void) {
         [GLOBAL_NATIVE] = {
             .var = {.tid = TYPE_NATIVE_FUNC_POINTER_ID, .name = "native"},
             .mem = &native,
+            .is_mut = false,
         },
     };
 

@@ -240,6 +240,7 @@ typedef struct Global{
     Var var;
     void* mem;//note may be not owned like for function pointers.
     void (*free_func)(void*);   // NULL means not owned / no cleanup needed
+    bool is_mut;
 } Global;
 
 typedef STACK(Global) GlobalS;
