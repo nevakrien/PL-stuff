@@ -1,3 +1,4 @@
+#include <string.h>
 #include "front_end.h"
 
 static bool par_eq(Par a, Par b){
@@ -17,6 +18,11 @@ void par_idx_table_free(ParIdxTable* table){
 	free(table->vals);
 	free(table->used);
 	*table = (ParIdxTable){0};
+}
+
+void par_idx_table_reset(ParIdxTable* table){
+	table->len = 0;
+	if(table->used) memset(table->used, 0, table->cap);
 }
 
 static void par_idx_table_grow(ParIdxTable* table){
@@ -71,6 +77,13 @@ void par_idx_table_put(ParIdxTable* table, Par key, par_idx val){
 	table->vals[i] = val;
 	table->used[i] = 1;
 	table->len++;
+}
+
+void comp_context_reset(CompileContext* ctx){
+	ctx->handles.len = 0;
+	ctx->holds.len = 0;
+	ctx->pars.len = 0;
+	par_idx_table_reset(&ctx->par_idxs);
 }
 
 par_idx comp_context_intern_par(CompileContext* ctx, Par par){

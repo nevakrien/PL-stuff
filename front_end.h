@@ -61,6 +61,7 @@ typedef struct ParIdxTable {
 static const par_idx PAR_IDX_INVALID = (par_idx)-1;
 
 void par_idx_table_free(ParIdxTable* table);
+void par_idx_table_reset(ParIdxTable* table);
 bool par_idx_table_get(const ParIdxTable* table, Par key, par_idx* out);
 void par_idx_table_put(ParIdxTable* table, Par key, par_idx val);
 
@@ -86,6 +87,7 @@ typedef struct CompileContext {
 	VirtualStack pars;
 } CompileContext;
 
+void comp_context_reset(CompileContext* ctx);
 par_idx comp_context_intern_par(CompileContext* ctx, Par par);
 
 typedef int (*ProcessCall)(
