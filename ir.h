@@ -72,6 +72,8 @@ typedef enum TYPE_KIND : char {
     TYPE_INT,
     TYPE_BYTE,
     TYPE_ARRAY,
+    TYPE_SLICE,
+    TYPE_VIEW,
     TYPE_STRUCT,
     TYPE_NATIVE_FUNC_POINTER,// function with signature (VM*)->VM_RESULT
 } TYPE_KIND;
@@ -81,6 +83,10 @@ typedef struct TypeField {
     type_idx tid;
     size_t offset;
 } TypeField;
+
+typedef struct TypeRef {
+    type_idx elem;
+} TypeRef;
 
 typedef SLICE(TypeField) TypeFieldS;
 
@@ -93,6 +99,8 @@ typedef struct Type {
     union {
         // Stack arrays are fixed-capacity values laid out as [len][data...].
         struct {type_idx elem; count_t capacity; size_t data_offset;} array;
+        // Slices and views are values laid out as [ptr][len].
+        TypeRef ref;
         TypeFieldS fields;
     } data;
 } Type;
@@ -117,36 +125,36 @@ typedef SLICE(Type) TypeS;
 } while(0)
 
 typedef enum OP_KIND : char {
-    OP_NULL=0,//null-terminator
+    OP_NULL=0,             // ( -- ) null-terminator
 
-    OP_CALL,//extra=id
-    OP_CALL_NATIVE_ON_STACK,
+    OP_CALL,               // ( outs..., ins... -- outs... ) extra=func id
+    OP_CALL_NATIVE_ON_STACK,// ( args..., native_fn -- results... ) native decides stack effect
 
-    OP_ASSIGN,
-    OP_ADD_ASSIGN,
-    OP_SUB_ASSIGN,
-    OP_MUL_ASSIGN,
-    OP_DIV_ASSIGN,
+    OP_ASSIGN,             // ( dst src -- dst ) *dst = *src
+    OP_ADD_ASSIGN,         // ( dst src -- dst ) *dst += *src
+    OP_SUB_ASSIGN,         // ( dst src -- dst ) *dst -= *src
+    OP_MUL_ASSIGN,         // ( dst src -- dst ) *dst *= *src
+    OP_DIV_ASSIGN,         // ( dst src -- dst ) *dst /= *src
 
-    OP_AND_ASSIGN,
-    OP_OR_ASSIGN,
-    OP_XOR_ASSIGN,
-    OP_BIT_NOT_ASSIGN,
+    OP_AND_ASSIGN,         // ( dst src -- dst ) *dst &= *src
+    OP_OR_ASSIGN,          // ( dst src -- dst ) *dst |= *src
+    OP_XOR_ASSIGN,         // ( dst src -- dst ) *dst ^= *src
+    OP_BIT_NOT_ASSIGN,     // ( dst -- dst ) *dst = ~*dst
 
-    OP_DROP,//extra=how many
+    OP_DROP,               // ( x... -- ) extra=how many
 
-    OP_PUSH_VAR,//extra=idx    
-    OP_PUSH_ARG,//extra=idx 
-    OP_PUSH_GLOBAL,//extra=idx
+    OP_PUSH_VAR,           // ( -- var ) extra=local var idx
+    OP_PUSH_ARG,           // ( -- arg ) extra=argument idx
+    OP_PUSH_GLOBAL,        // ( -- global ) extra=global idx
 
-    OP_ARR_PUSH,
-    OP_ARR_AT,
-    OP_ARR_DROP,
+    OP_ARR_PUSH,           // ( arr elem -- arr ) append elem to stack array
+    OP_ARR_AT,             // ( arr idx -- elem ) bounds-checked stack array indexing
+    OP_ARR_DROP,           // ( arr -- arr ) drop last element from stack array
 
-    // OP_SLICE_FROM_AR,
-    // OP_SLICE_AT,
-    // OP_SLICE_INC,//[data+=x,len]
-    // OP_SLICE_DEC,//[data,len-=x]
+    OP_SLICE_FROM_AR,      // ( slice_or_view arr -- slice_or_view ) slice/view points at array data
+    OP_SLICE_AT,           // ( slice_or_view idx -- elem ) bounds-checked slice/view indexing
+    OP_SLICE_INC,          // ( slice n -- slice ) slice.data += n, len unchanged
+    OP_SLICE_DEC,          // ( slice n -- slice ) slice.len -= n, data unchanged
 } OP_KIND;
 
 typedef struct OP {
@@ -250,6 +258,14 @@ static inline Type type_array(type_idx elem,count_t capacity){
     return (Type){.kind=TYPE_ARRAY,.size=0,.align=0,.data.array={.elem=elem,.capacity=capacity}};
 }
 
+static inline Type type_slice(type_idx elem){
+    return (Type){.kind=TYPE_SLICE,.name="Slice",.size=0,.align=0,.data.ref={.elem=elem}};
+}
+
+static inline Type type_view(type_idx elem){
+    return (Type){.kind=TYPE_VIEW,.name="View",.size=0,.align=0,.data.ref={.elem=elem}};
+}
+
 static inline Type type_struct(const char* name,TypeFieldS fields){
     return (Type){.kind=TYPE_STRUCT,.name=name,.size=0,.align=0,.data.fields=fields};
 }
@@ -265,6 +281,15 @@ static inline bool type_is_builtin(type_idx tid){
 static inline size_t type_stack_size(TypeS types,type_idx tid){
     assert(type_idx_valid(types,tid));
     return types.data[tid].size;
+}
+
+static inline size_t type_slice_len_offset(void){
+    size_t align = alignof(count_t);
+    return (sizeof(void*) + align - 1) / align * align;
+}
+
+static inline size_t type_slice_payload_size(void){
+    return type_slice_len_offset() + sizeof(count_t);
 }
 
 

@@ -32,6 +32,10 @@ typedef enum ByteCode : char {
 	B_PUSH_GLOBAL,
 	B_CALL,
 	B_CALL_NATIVE,
+	B_SLICE_FROM_ARR,
+	B_PUSH_SLICE_AT,
+	B_SLICE_INC,
+	B_SLICE_DEC,
 
 	//numeric buildins
 } ByteCode;

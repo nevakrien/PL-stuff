@@ -35,11 +35,23 @@ static Type test_types[] = {
         .size = sizeof(VmNativeFunc),
         .align = alignof(VmNativeFunc),
     },
+    [4] = {
+        .kind = TYPE_SLICE,
+        .name = "Slice[int]",
+        .data.ref = {.elem = TYPE_INT_ID},
+    },
+    [5] = {
+        .kind = TYPE_VIEW,
+        .name = "View[int]",
+        .data.ref = {.elem = TYPE_INT_ID},
+    },
 };
 
 enum {
     TYPE_INT_ARRAY4_ID = 2,
     TYPE_NATIVE_FUNC_POINTER_ID = 3,
+    TYPE_INT_SLICE_ID = 4,
+    TYPE_INT_VIEW_ID = 5,
 };
 
 static TypeS test_type_slice(void) {
@@ -961,6 +973,203 @@ static void test_array_push_at_and_drop(void) {
     vm_free_for_test(&vm);
 }
 
+static void test_slice_from_array_at_inc_and_dec(void) {
+    enum {
+        ARG_Y,
+        ARG_SLICE,
+        ARG_ARR,
+        ARG_ZERO,
+        ARG_ONE,
+        ARG_COUNT,
+    };
+
+    enum {
+        BLOCK_ROOT,
+        BLOCK_COUNT,
+    };
+
+    enum {
+        OP_PUSH_SLICE_FOR_FROM,
+        OP_PUSH_ARR,
+        OP_DO_SLICE_FROM_ARR,
+
+        OP_PUSH_SLICE_FOR_INC,
+        OP_PUSH_ONE_FOR_INC,
+        OP_DO_SLICE_INC,
+
+        OP_PUSH_SLICE_FOR_DEC,
+        OP_PUSH_ONE_FOR_DEC,
+        OP_DO_SLICE_DEC,
+
+        OP_PUSH_Y,
+        OP_PUSH_SLICE_FOR_AT,
+        OP_PUSH_ZERO,
+        OP_DO_SLICE_AT,
+        OP_ASSIGN_Y,
+
+        OP_COUNT,
+    };
+
+    static SigInput ins[] = {
+        [0] = {.var = {.tid = TYPE_INT_ARRAY4_ID, .name = "arr"}},
+        [1] = {.var = {.tid = TYPE_INT_ID,        .name = "zero"}},
+        [2] = {.var = {.tid = TYPE_INT_ID,        .name = "one"}},
+    };
+
+    static Var outs[] = {
+        {.tid = TYPE_INT_ID,       .name = "y"},
+        {.tid = TYPE_INT_SLICE_ID, .name = "slice"},
+    };
+
+    static Var vars[] = {
+        [ARG_Y]     = {.tid = TYPE_INT_ID,        .name = "y"},
+        [ARG_SLICE] = {.tid = TYPE_INT_SLICE_ID,  .name = "slice"},
+        [ARG_ARR]   = {.tid = TYPE_INT_ARRAY4_ID, .name = "arr"},
+        [ARG_ZERO]  = {.tid = TYPE_INT_ID,        .name = "zero"},
+        [ARG_ONE]   = {.tid = TYPE_INT_ID,        .name = "one"},
+    };
+
+    static OP ops[] = {
+        [OP_PUSH_SLICE_FOR_FROM] = {.kind = OP_PUSH_ARG,      .extra = ARG_SLICE},
+        [OP_PUSH_ARR]            = {.kind = OP_PUSH_ARG,      .extra = ARG_ARR},
+        [OP_DO_SLICE_FROM_ARR]   = {.kind = OP_SLICE_FROM_AR, .extra = 0},
+
+        [OP_PUSH_SLICE_FOR_INC]  = {.kind = OP_PUSH_ARG,      .extra = ARG_SLICE},
+        [OP_PUSH_ONE_FOR_INC]    = {.kind = OP_PUSH_ARG,      .extra = ARG_ONE},
+        [OP_DO_SLICE_INC]        = {.kind = OP_SLICE_INC,     .extra = 0},
+
+        [OP_PUSH_SLICE_FOR_DEC]  = {.kind = OP_PUSH_ARG,      .extra = ARG_SLICE},
+        [OP_PUSH_ONE_FOR_DEC]    = {.kind = OP_PUSH_ARG,      .extra = ARG_ONE},
+        [OP_DO_SLICE_DEC]        = {.kind = OP_SLICE_DEC,     .extra = 0},
+
+        [OP_PUSH_Y]              = {.kind = OP_PUSH_ARG,      .extra = ARG_Y},
+        [OP_PUSH_SLICE_FOR_AT]   = {.kind = OP_PUSH_ARG,      .extra = ARG_SLICE},
+        [OP_PUSH_ZERO]           = {.kind = OP_PUSH_ARG,      .extra = ARG_ZERO},
+        [OP_DO_SLICE_AT]         = {.kind = OP_SLICE_AT,      .extra = 0},
+        [OP_ASSIGN_Y]            = {.kind = OP_ASSIGN,        .extra = 0},
+    };
+
+    static Block blocks[] = {
+        [BLOCK_ROOT] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = OP_PUSH_SLICE_FOR_FROM, .len = OP_COUNT},
+        },
+    };
+
+    Func func = {
+        .name = "test_slice_from_array_at_inc_and_dec",
+        .sig = {
+            .ins = {.data = ins, .len = 3},
+            .outs = {.data = outs, .len = 2},
+            .can_crash = false,
+        },
+        .types = test_type_slice(),
+        .blocks = {.data = blocks, .len = BLOCK_COUNT},
+        .ops = {.data = ops, .len = OP_COUNT},
+        .vars = {.data = vars, .len = ARG_COUNT},
+    };
+
+    VM vm;
+    vm_init_for_test(&vm, 1024, 32, 8);
+
+    alignas(Cell) unsigned char arr[128] = {0};
+    count_t len = 2;
+    num_t first = 11;
+    num_t second = 22;
+    assert(type_layout_all(test_type_slice()));
+    size_t data_offset = test_types[TYPE_INT_ARRAY4_ID].data.array.data_offset;
+    memcpy(arr, &len, sizeof(len));
+    memcpy(arr + data_offset, &first, sizeof(first));
+    memcpy(arr + data_offset + sizeof(second), &second, sizeof(second));
+
+    alignas(Cell) unsigned char slice[type_slice_payload_size()];
+    memset(slice, 0, sizeof(slice));
+    num_t y = 0;
+    num_t zero = 0;
+    num_t one = 1;
+
+    push_param_or_die(&vm, &y);
+    push_param_or_die(&vm, slice);
+    push_param_or_die(&vm, arr);
+    push_param_or_die(&vm, &zero);
+    push_param_or_die(&vm, &one);
+
+    run_func_or_die(&func, &vm);
+
+    void* slice_data;
+    count_t slice_len;
+    memcpy(&slice_data, slice, sizeof(slice_data));
+    memcpy(&slice_len, slice + type_slice_len_offset(), sizeof(slice_len));
+
+    assert(y == 22);
+    assert(slice_data == arr + data_offset + sizeof(num_t));
+    assert(slice_len == 1);
+
+    vm_free_for_test(&vm);
+}
+
+static void test_view_rejects_slice_mutation(void) {
+    enum {
+        ARG_VIEW,
+        ARG_ONE,
+        ARG_COUNT,
+    };
+
+    enum {
+        BLOCK_ROOT,
+        BLOCK_COUNT,
+    };
+
+    enum {
+        OP_PUSH_VIEW,
+        OP_PUSH_ONE,
+        OP_INC_VIEW,
+        OP_COUNT,
+    };
+
+    static SigInput ins[] = {
+        [0] = {.var = {.tid = TYPE_INT_ID, .name = "one"}},
+    };
+
+    static Var outs[] = {
+        {.tid = TYPE_INT_VIEW_ID, .name = "view"},
+    };
+
+    static Var vars[] = {
+        [ARG_VIEW] = {.tid = TYPE_INT_VIEW_ID, .name = "view"},
+        [ARG_ONE]  = {.tid = TYPE_INT_ID,      .name = "one"},
+    };
+
+    static OP ops[] = {
+        [OP_PUSH_VIEW] = {.kind = OP_PUSH_ARG,  .extra = ARG_VIEW},
+        [OP_PUSH_ONE]  = {.kind = OP_PUSH_ARG,  .extra = ARG_ONE},
+        [OP_INC_VIEW]  = {.kind = OP_SLICE_INC, .extra = 0},
+    };
+
+    static Block blocks[] = {
+        [BLOCK_ROOT] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = OP_PUSH_VIEW, .len = OP_COUNT},
+        },
+    };
+
+    Func func = {
+        .name = "test_view_rejects_slice_mutation",
+        .sig = {
+            .ins = {.data = ins, .len = 1},
+            .outs = {.data = outs, .len = 1},
+            .can_crash = false,
+        },
+        .types = test_type_slice(),
+        .blocks = {.data = blocks, .len = BLOCK_COUNT},
+        .ops = {.data = ops, .len = OP_COUNT},
+        .vars = {.data = vars, .len = ARG_COUNT},
+    };
+
+    VmCode code = vm_compile_no_defers(&func, NULL);
+    assert(!code.data);
+}
+
 static void test_loop_break_skips_unreachable_body_tail(void) {
     enum {
         ARG_Y,
@@ -1716,6 +1925,12 @@ int main(void) {
 
     test_array_push_at_and_drop();
     puts("ok: test_array_push_at_and_drop");
+
+    test_slice_from_array_at_inc_and_dec();
+    puts("ok: test_slice_from_array_at_inc_and_dec");
+
+    test_view_rejects_slice_mutation();
+    puts("ok: test_view_rejects_slice_mutation");
 
     test_loop_break_skips_unreachable_body_tail();
     puts("ok: test_loop_break_skips_unreachable_body_tail");

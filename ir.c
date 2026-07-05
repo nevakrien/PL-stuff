@@ -46,6 +46,13 @@ static bool type_layout_one(TypeS types,type_idx tid,TypeLayoutState* states){
 		break;
 	}
 
+	case TYPE_SLICE:
+	case TYPE_VIEW:
+		if(!type_layout_one(types,type->data.ref.elem,states)) return false;
+		type->payload_size = type_slice_payload_size();
+		type->align = alignof(void*) > alignof(count_t) ? alignof(void*) : alignof(count_t);
+		break;
+
 	case TYPE_STRUCT: {
 		size_t offset = 0;
 		size_t max_align = 1;

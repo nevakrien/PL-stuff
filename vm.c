@@ -149,6 +149,19 @@ static size_t type_payload_size(TypeS types,type_idx tid){
 	return types.data[tid].payload_size;
 }
 
+static bool type_is_ref_kind(TYPE_KIND kind){
+	return kind == TYPE_SLICE || kind == TYPE_VIEW;
+}
+
+static bool type_is_slice_or_view(TypeS types,type_idx tid){
+	return type_idx_valid(types,tid) && type_is_ref_kind(types.data[tid].kind);
+}
+
+static bool emit_slice_layout(CodeBuilder* code,size_t elem_size){
+	if(!emit_size(code,elem_size)) return false;
+	return emit_size(code,type_slice_len_offset());
+}
+
 static bool emit_storage_add(Compiler* c,offset_t amount){
 	if(!emit_op(&c->code,B_STORAGE_ADD)) return false;
 	if(!emit_offset(&c->code,amount)) return false;
@@ -450,6 +463,46 @@ static bool compile_op(Compiler* c,OP op){
 		if(c->params.len < 1) return false;
 		if(!type_idx_valid(types,TOP(c->params)) || types.data[TOP(c->params)].kind != TYPE_ARRAY) return false;
 		return emit_op(&c->code,B_ARR_DROP);
+
+	case OP_SLICE_FROM_AR: {
+		if(c->params.len < 2) return false;
+		type_idx ref_tid = c->params.data[c->params.len - 2];
+		type_idx arr_tid = c->params.data[c->params.len - 1];
+		if(!type_idx_valid(types,arr_tid) || types.data[arr_tid].kind != TYPE_ARRAY) return false;
+		if(!type_is_slice_or_view(types,ref_tid)) return false;
+		Type arr = types.data[arr_tid];
+		if(types.data[ref_tid].data.ref.elem != arr.data.array.elem) return false;
+		Type elem = types.data[arr.data.array.elem];
+		if(!emit_op(&c->code,B_SLICE_FROM_ARR)) return false;
+		if(!emit_size(&c->code,arr.data.array.data_offset)) return false;
+		if(!emit_slice_layout(&c->code,elem.payload_size)) return false;
+		return pop_types(&c->params,1);
+	}
+
+	case OP_SLICE_AT: {
+		if(c->params.len < 2) return false;
+		type_idx ref_tid = c->params.data[c->params.len - 2];
+		if(c->params.data[c->params.len - 1] != TYPE_INT_ID) return false;
+		if(!type_is_slice_or_view(types,ref_tid)) return false;
+		Type ref = types.data[ref_tid];
+		Type elem = types.data[ref.data.ref.elem];
+		if(!emit_op(&c->code,B_PUSH_SLICE_AT)) return false;
+		if(!emit_slice_layout(&c->code,elem.payload_size)) return false;
+		if(!pop_types(&c->params,2)) return false;
+		return push_type(&c->params,ref.data.ref.elem);
+	}
+
+	case OP_SLICE_INC:
+	case OP_SLICE_DEC: {
+		if(c->params.len < 2) return false;
+		type_idx ref_tid = c->params.data[c->params.len - 2];
+		if(c->params.data[c->params.len - 1] != TYPE_INT_ID) return false;
+		if(!type_idx_valid(types,ref_tid) || types.data[ref_tid].kind != TYPE_SLICE) return false;
+		Type elem = types.data[types.data[ref_tid].data.ref.elem];
+		if(!emit_op(&c->code,op.kind == OP_SLICE_INC ? B_SLICE_INC : B_SLICE_DEC)) return false;
+		if(!emit_slice_layout(&c->code,elem.payload_size)) return false;
+		return pop_types(&c->params,1);
+	}
 	}
 
 	return false;
@@ -978,7 +1031,6 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			if(vm->param_stack.len < 2) return VM_PARAM_UNDERFLOW;
 			void* src = TOP(vm->param_stack);
 			vm->param_stack.len--;
-			//we could memcpy here (since semantically no alias) but we choose not to since this is a debug vm.
 			memmove(TOP(vm->param_stack),src,size);
 			break;
 		}
@@ -1043,7 +1095,6 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 				if(ans == VM_OK) ans = VM_ARRAY_CAPACITY;
 				goto crash;
 			}
-			//we could memcpy here (since semantically no alias) but we choose not to since this is a debug vm.
 			memmove(arr + data_offset + elem_size * len,elem,elem_size);
 			len++;
 			memcpy(arr,&len,sizeof(len));
@@ -1061,6 +1112,86 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			}
 			len--;
 			memcpy(arr,&len,sizeof(len));
+			break;
+		}
+
+		case B_SLICE_FROM_ARR: {
+			size_t data_offset, elem_size, len_offset;
+			pc = read_size(pc,&data_offset);
+			pc = read_size(pc,&elem_size);
+			pc = read_size(pc,&len_offset);
+			(void)elem_size;
+			if(vm->param_stack.len < 2) return VM_PARAM_UNDERFLOW;
+
+			char* arr = TOP(vm->param_stack);
+			vm->param_stack.len--;
+
+			void* data = arr + data_offset;
+			count_t len;
+			memcpy(&len,arr,sizeof(len));
+
+			char* slice = TOP(vm->param_stack);
+			memcpy(slice,&data,sizeof(data));
+			memcpy(slice + len_offset,&len,sizeof(len));
+			break;
+		}
+
+		case B_PUSH_SLICE_AT: {
+			size_t elem_size, len_offset;
+			pc = read_size(pc,&elem_size);
+			pc = read_size(pc,&len_offset);
+			if(vm->param_stack.len < 2) return VM_PARAM_UNDERFLOW;
+
+			num_t idx;
+			memcpy(&idx,TOP(vm->param_stack),sizeof(idx));
+			vm->param_stack.len--;
+
+			char* slice = TOP(vm->param_stack);
+			void* data;
+			count_t len;
+			memcpy(&data,slice,sizeof(data));
+			memcpy(&len,slice + len_offset,sizeof(len));
+			if(idx < 0 || (count_t)idx >= len){
+				if(ans == VM_OK) ans = VM_ARRAY_BOUNDS;
+				goto crash;
+			}
+			TOP(vm->param_stack) = (char*)data + elem_size * (size_t)idx;
+			break;
+		}
+
+		case B_SLICE_INC:
+		case B_SLICE_DEC: {
+			ByteCode bop = *(pc - 1);
+			size_t elem_size, len_offset;
+			pc = read_size(pc,&elem_size);
+			pc = read_size(pc,&len_offset);
+			if(vm->param_stack.len < 2) return VM_PARAM_UNDERFLOW;
+
+			num_t amount;
+			memcpy(&amount,TOP(vm->param_stack),sizeof(amount));
+			vm->param_stack.len--;
+			if(amount < 0){
+				if(ans == VM_OK) ans = VM_ARRAY_BOUNDS;
+				goto crash;
+			}
+
+			char* slice = TOP(vm->param_stack);
+			void* data;
+			count_t len;
+			memcpy(&data,slice,sizeof(data));
+			memcpy(&len,slice + len_offset,sizeof(len));
+			if((count_t)amount > len){
+				if(ans == VM_OK) ans = VM_ARRAY_BOUNDS;
+				goto crash;
+			}
+
+			if(bop == B_SLICE_INC){
+				data = (char*)data + elem_size * (size_t)amount;
+				memcpy(slice,&data,sizeof(data));
+			} else {
+				len -= (count_t)amount;
+				memcpy(slice + len_offset,&len,sizeof(len));
+			}
 			break;
 		}
 
