@@ -22,6 +22,7 @@ Examples of illegal basic blocks:
 - `OP_ASSIGN` without first pushing both destination and source pointers.
 - `OP_ADD_ASSIGN` unless the top two stack entries are both `int` pointers.
 - `OP_ARR_AT` unless the stack has an array pointer followed by an `int` index pointer.
+- `OP_STRUCT_AT` unless the stack has a struct pointer and `extra` names an existing field.
 
 Extra values left by a basic block are not visible to following blocks; they are discarded at the end of the basic block.
 
@@ -61,6 +62,8 @@ Slice and view operations work on reference values laid out as `[ptr][len]`:
 `OP_CALL` expects output pointers followed by input pointers for the target function. On normal return, input pointers are discarded and output pointers remain on the caller's argument stack.
 
 `OP_CALL_NATIVE_ON_STACK` expects a native function pointer on top of the argument stack. The VM pops that pointer and calls it with the `VM*`; the native function is responsible for any additional stack effect.
+
+`OP_STRUCT_AT` expects a struct pointer. It replaces that entry with a pointer to the field selected by `extra`.
 
 ## Blocks
 

@@ -21,7 +21,7 @@
 #endif
 
 #ifndef LIFE_TYPE
-#define LIFE_TYPE ssize_t
+#define LIFE_TYPE size_t
 #endif
 
 
@@ -32,16 +32,22 @@ typedef COUNT_TYPE count_t;
 typedef SCOUNT_TYPE scount_t;
 typedef LIFE_TYPE life_t;
 
-typedef count_t var_idx;
+static const life_t LIFE_FREE = 0;
+static const life_t LIFE_MUT = -1;
+
+typedef count_t op_idx;
 typedef count_t block_idx;
 typedef count_t type_idx;
+
+//types used as ops in the bytecode
+typedef uoffset_t var_idx;
+typedef uoffset_t func_idx;
 
 static const type_idx TYPE_INT_ID = 0;
 static const type_idx TYPE_BYTE_ID = 1;
 static const type_idx TYPE_INVALID_ID = (type_idx)-1;
 
 typedef union Cell {
-	life_t life;
 	void* ptr;
 	const void* cptr;
 	size_t size;
@@ -53,6 +59,7 @@ typedef union Cell {
 #include <stdalign.h>
 #define CELL_ALIGN alignof(Cell)
 #endif
+
 
 #define STACK(T) struct { \
     T *data;            \
@@ -155,6 +162,8 @@ typedef enum OP_KIND : char {
     OP_SLICE_AT,           // ( slice_or_view idx -- elem ) bounds-checked slice/view indexing
     OP_SLICE_INC,          // ( slice n -- slice ) slice.data += n, len unchanged
     OP_SLICE_DEC,          // ( slice n -- slice ) slice.len -= n, data unchanged
+
+    OP_STRUCT_AT,          // ( struct -- field ) extra=field idx
 } OP_KIND;
 
 typedef struct OP {
@@ -220,6 +229,47 @@ typedef struct Block {
 
 typedef SLICE(Block) BlockS;
 typedef STACK(Block) BlocksBuilder;
+
+// Some VM ops have additional data stored immediately after them.
+typedef enum ByteCode : char {
+	B_DONE,
+	B_RET,
+	B_STORAGE_ADD,
+	B_PUSH_VAR,
+	B_PUSH_ARG,
+	B_DROP_N,
+	B_PUSH_ARR_AT,//pops an index pointer and an array pointer, pushes element pointer
+	B_COPY,
+	B_ADD,
+	B_SUB,
+	B_MUL,
+	B_DIV,
+	B_AND,
+	B_OR,
+	B_XOR,
+	B_BIT_NOT,
+	B_ARR_PUSH,
+	B_ARR_DROP,
+	B_JUMP,
+	B_BRANCH,
+	B_PUSH_CRASH,
+	B_POP_CRASH,
+	B_CRASH,
+	B_HARD_CRASH,
+	B_PUSH_GLOBAL,
+	B_CALL,
+	B_CALL_NATIVE,
+	B_SLICE_FROM_ARR,
+	B_PUSH_SLICE_AT,
+	B_SLICE_INC,
+	B_SLICE_DEC,
+	B_PUSH_STRUCT_AT,
+
+	//numeric buildins
+} ByteCode;
+
+typedef SLICE(ByteCode) VmCode;
+typedef STACK(VmCode) VmFuncS;
 
 
 typedef struct Func {

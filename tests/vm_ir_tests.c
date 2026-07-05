@@ -5,6 +5,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+static TypeField test_pair_fields[] = {
+    [0] = {.name = "first",  .tid = TYPE_INT_ID},
+    [1] = {.name = "second", .tid = TYPE_INT_ID},
+};
+
 static Type test_types[] = {
     [0] = {
         .kind = TYPE_INT,
@@ -45,6 +50,11 @@ static Type test_types[] = {
         .name = "View[int]",
         .data.ref = {.elem = TYPE_INT_ID},
     },
+    [6] = {
+        .kind = TYPE_STRUCT,
+        .name = "Pair",
+        .data.fields = {.data = test_pair_fields, .len = 2},
+    },
 };
 
 enum {
@@ -52,6 +62,7 @@ enum {
     TYPE_NATIVE_FUNC_POINTER_ID = 3,
     TYPE_INT_SLICE_ID = 4,
     TYPE_INT_VIEW_ID = 5,
+    TYPE_PAIR_ID = 6,
 };
 
 static TypeS test_type_slice(void) {
@@ -1189,6 +1200,86 @@ static void test_slice_from_array_at_inc_and_dec(void) {
     vm_free_for_test(&vm);
 }
 
+static void test_struct_at_assigns_field(void) {
+    enum {
+        ARG_Y,
+        ARG_PAIR,
+        ARG_COUNT,
+    };
+
+    enum {
+        BLOCK_ROOT,
+        BLOCK_COUNT,
+    };
+
+    enum {
+        OP_PUSH_Y,
+        OP_PUSH_PAIR,
+        OP_STRUCT_AT_SECOND,
+        OP_ASSIGN_Y,
+        OP_COUNT,
+    };
+
+    static SigInput ins[] = {
+        [0] = {.var = {.tid = TYPE_PAIR_ID, .name = "pair"}},
+    };
+
+    static Var outs[] = {
+        {.tid = TYPE_INT_ID, .name = "y"},
+    };
+
+    static Var vars[] = {
+        [ARG_Y]    = {.tid = TYPE_INT_ID,  .name = "y"},
+        [ARG_PAIR] = {.tid = TYPE_PAIR_ID, .name = "pair"},
+    };
+
+    static OP ops[] = {
+        [OP_PUSH_Y]           = {.kind = OP_PUSH_ARG,  .extra = ARG_Y},
+        [OP_PUSH_PAIR]        = {.kind = OP_PUSH_ARG,  .extra = ARG_PAIR},
+        [OP_STRUCT_AT_SECOND] = {.kind = OP_STRUCT_AT, .extra = 1},
+        [OP_ASSIGN_Y]         = {.kind = OP_ASSIGN,    .extra = 0},
+    };
+
+    static Block blocks[] = {
+        [BLOCK_ROOT] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = OP_PUSH_Y, .len = OP_COUNT},
+        },
+    };
+
+    Func func = {
+        .name = "test_struct_at_assigns_field",
+        .sig = {
+            .ins = {.data = ins, .len = 1},
+            .outs = {.data = outs, .len = 1},
+        },
+        .types = test_type_slice(),
+        .blocks = {.data = blocks, .len = BLOCK_COUNT},
+        .ops = {.data = ops, .len = OP_COUNT},
+        .vars = {.data = vars, .len = ARG_COUNT},
+    };
+
+    VM vm;
+    vm_init_for_test(&vm, 1024, 8, 8);
+
+    assert(type_layout_all(test_type_slice()));
+    alignas(Cell) unsigned char pair[64] = {0};
+    num_t first = 11;
+    num_t second = 22;
+    memcpy(pair + test_pair_fields[0].offset, &first, sizeof(first));
+    memcpy(pair + test_pair_fields[1].offset, &second, sizeof(second));
+
+    num_t y = 0;
+    push_param_or_die(&vm, &y);
+    push_param_or_die(&vm, pair);
+
+    run_func_or_die(&func, &vm);
+
+    assert(y == second);
+
+    vm_free_for_test(&vm);
+}
+
 static void test_view_rejects_slice_mutation(void) {
     enum {
         ARG_VIEW,
@@ -2010,6 +2101,9 @@ int main(void) {
 
     test_slice_from_array_at_inc_and_dec();
     puts("ok: test_slice_from_array_at_inc_and_dec");
+
+    test_struct_at_assigns_field();
+    puts("ok: test_struct_at_assigns_field");
 
     test_view_rejects_slice_mutation();
     puts("ok: test_view_rejects_slice_mutation");

@@ -505,6 +505,20 @@ static bool compile_op(Compiler* c,OP op){
 		if(!emit_slice_layout(&c->code,elem.payload_size)) return false;
 		return pop_types(&c->params,1);
 	}
+
+	case OP_STRUCT_AT: {
+		if(c->params.len < 1) return false;
+		type_idx struct_tid = TOP(c->params);
+		if(!type_idx_valid(types,struct_tid) || types.data[struct_tid].kind != TYPE_STRUCT) return false;
+		Type strct = types.data[struct_tid];
+		if(op.extra >= strct.data.fields.len) return false;
+		TypeField field = strct.data.fields.data[op.extra];
+		if(!type_idx_valid(types,field.tid)) return false;
+		if(!emit_op(&c->code,B_PUSH_STRUCT_AT)) return false;
+		if(!emit_size(&c->code,field.offset)) return false;
+		c->params.data[c->params.len - 1] = field.tid;
+		return true;
+	}
 	}
 
 	return false;
@@ -1197,6 +1211,14 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 				len -= (count_t)amount;
 				memcpy(slice + len_offset,&len,sizeof(len));
 			}
+			break;
+		}
+
+		case B_PUSH_STRUCT_AT: {
+			size_t field_offset;
+			pc = read_size(pc,&field_offset);
+			if(vm->param_stack.len < 1) return VM_PARAM_UNDERFLOW;
+			TOP(vm->param_stack) = (char*)TOP(vm->param_stack) + field_offset;
 			break;
 		}
 
