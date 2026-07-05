@@ -396,41 +396,87 @@ static int check_portal_region(PortalCtx* p,CompileContext* ctx,const Func* func
 	return 0;
 }
 
-static int copy_portal_holds(PortalCtx* p,CompileContext* ctx,const Func* func,const ScanState* state,par_idx dst,par_idx src,CodeLoc loc){
-	if(src >= ctx->handles.len) return 1;
-	Handle* h = &ctx->handles.data[src];
-	for(count_t i = 0;i < h->num_holds;i++){
-		HoldChain hold = ctx->holds.data[h->holds_start + i];
-		int r = check_portal_region(p,ctx,func,state,dst,hold.par,loc);
-		if(r) return r;
-		if(!handle_add_hold(ctx,dst,hold.par,loc,hold.just_const)) return 1;
-	}
-	return 0;
-}
-
-static int gather_portal_regions_op(void* user,CompileContext* ctx,const ScanState* state,func_idx current,OP op,CodeLoc loc){
+static int gather_portal_regions_op(
+	void* user,
+	CompileContext* ctx,
+	const ScanState* state,
+	func_idx current,
+	OP op,
+	CodeLoc loc
+){
 	PortalCtx* p = user;
 	Func* func = &ctx->funcs.data[current];
+
 	if(op.kind == OP_SLICE_FROM_AR){
 		if(ctx->pars.len < 2) return 1;
+
 		par_idx ref = ctx->pars.data[ctx->pars.len - 2];
 		par_idx arr = ctx->pars.data[ctx->pars.len - 1];
-		type_idx ref_tid = par_type(ctx,func,ref);
-		if(!type_idx_valid(func->types,ref_tid)) return 1;
+
+		type_idx ref_tid = par_type(ctx, func, ref);
+		if(!type_idx_valid(func->types, ref_tid)) return 1;
+
 		Type ref_type = func->types.data[ref_tid];
 		if(ref_type.kind != TYPE_SLICE && ref_type.kind != TYPE_VIEW) return 1;
-		int r = check_portal_region(p,ctx,func,state,ref,arr,loc);
+
+		int r = check_portal_region(p, ctx, func, state, ref, arr, loc);
 		if(r) return r;
-		return handle_add_hold(ctx,ref,arr,loc,ref_type.kind == TYPE_VIEW) ? 0 : 1;
+
+		/*
+			A view holds its backing data through a shared-only edge.
+			A slice holds its backing data through an edge whose borrow kind
+			depends on how the slice itself is borrowed.
+		*/
+		bool shared_only = ref_type.kind == TYPE_VIEW;
+		return handle_add_hold(ctx, ref, arr, loc, shared_only) ? 0 : 1;
 	}
+
 	if(op.kind == OP_ASSIGN){
 		if(ctx->pars.len < 2) return 1;
+
 		par_idx dst = ctx->pars.data[ctx->pars.len - 2];
 		par_idx src = ctx->pars.data[ctx->pars.len - 1];
-		if(!par_is_portal(ctx,func,dst)) return 0;
-		if(!portal_retargetable(ctx,func,dst)) return report_portal(p,ctx,PORTAL_ERROR_NON_LOCAL,dst,src,loc);
-		if(par_is_portal(ctx,func,src)) return copy_portal_holds(p,ctx,func,state,dst,src,loc);
+
+		if(!par_is_portal(ctx, func, dst)) return 0;
+
+		if(!portal_retargetable(ctx, func, dst)){
+			return report_portal(
+				p,
+				ctx,
+				PORTAL_ERROR_NON_LOCAL,
+				dst,
+				src,
+				loc
+			);
+		}
+
+		/*
+			If assigning one portal to another, do not copy src's holds into dst.
+			Record the actual graph edge:
+
+				dst -> src
+
+			Then borrow_par() will recursively walk:
+
+				dst -> src -> src's backing data
+
+			This preserves the fact that dst depends on src as a portal object.
+		*/
+		if(par_is_portal(ctx, func, src)){
+			int r = check_portal_region(p, ctx, func, state, dst, src, loc);
+			if(r) return r;
+
+			return handle_add_hold(ctx, dst, src, loc, false) ? 0 : 1;
+		}
+
+		/*
+			Assignment from a non-portal into a portal is either ordinary value
+			copying or should be rejected by the later type checker. This pass
+			only records backing relationships.
+		*/
+		return 0;
 	}
+
 	return 0;
 }
 
