@@ -149,7 +149,7 @@ typedef enum OP_KIND : char {
 
     OP_ARR_PUSH,           // ( arr elem -- arr ) append elem to stack array
     OP_ARR_AT,             // ( arr idx -- elem ) bounds-checked stack array indexing
-    OP_ARR_DROP,           // ( arr -- arr ) drop last element from stack array
+    OP_ARR_DROP,           // ( arr n -- arr ) drop n elements from stack array
 
     OP_SLICE_FROM_AR,      // ( slice_or_view arr -- slice_or_view ) slice/view points at array data
     OP_SLICE_AT,           // ( slice_or_view idx -- elem ) bounds-checked slice/view indexing

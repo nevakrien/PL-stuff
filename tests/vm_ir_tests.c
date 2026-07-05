@@ -806,6 +806,85 @@ static void test_array_crashes_unwind_stack(void) {
     assert(cap_vm.param_stack.len == ARG_COUNT);
 
     vm_free_for_test(&cap_vm);
+
+    enum {
+        DROP_BLOCK_ROOT,
+        DROP_BLOCK_BODY,
+        DROP_BLOCK_PAD,
+        DROP_BLOCK_COUNT,
+    };
+
+    enum {
+        DROP_OP_PUSH_ARR,
+        DROP_OP_PUSH_COUNT,
+        DROP_OP_ARR_DROP,
+        DROP_OP_PUSH_Y,
+        DROP_OP_PUSH_MARK,
+        DROP_OP_ASSIGN_Y,
+        DROP_OP_COUNT,
+    };
+
+    static OP drop_ops[] = {
+        [DROP_OP_PUSH_ARR]   = {.kind = OP_PUSH_ARG, .extra = ARG_ARR},
+        [DROP_OP_PUSH_COUNT] = {.kind = OP_PUSH_ARG, .extra = ARG_IDX},
+        [DROP_OP_ARR_DROP]   = {.kind = OP_ARR_DROP, .extra = 0},
+        [DROP_OP_PUSH_Y]     = {.kind = OP_PUSH_ARG, .extra = ARG_Y},
+        [DROP_OP_PUSH_MARK]  = {.kind = OP_PUSH_ARG, .extra = ARG_MARK},
+        [DROP_OP_ASSIGN_Y]   = {.kind = OP_ASSIGN,   .extra = 0},
+    };
+
+    static Block drop_blocks[] = {
+        [DROP_BLOCK_ROOT] = {
+            .kind = BLOCK_CRASH_PAD,
+            .data.crash_pad = {.body = DROP_BLOCK_BODY, .pad = DROP_BLOCK_PAD},
+        },
+        [DROP_BLOCK_BODY] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = DROP_OP_PUSH_ARR, .len = 3},
+        },
+        [DROP_BLOCK_PAD] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = DROP_OP_PUSH_Y, .len = 3},
+        },
+    };
+
+    Func drop_func = {
+        .name = "test_array_drop_underflow_unwinds_stack",
+        .sig = {
+            .ins = {.data = ins, .len = 3},
+            .outs = {.data = outs, .len = 1},
+            .can_crash = true,
+        },
+        .types = test_type_slice(),
+        .blocks = {.data = drop_blocks, .len = DROP_BLOCK_COUNT},
+        .ops = {.data = drop_ops, .len = DROP_OP_COUNT},
+        .vars = {.data = vars, .len = ARG_COUNT},
+    };
+
+    VM drop_vm;
+    vm_init_for_test(&drop_vm, 1024, 16, 8);
+
+    alignas(Cell) unsigned char drop_arr[128] = {0};
+    count_t drop_len = 1;
+    memcpy(drop_arr, &drop_len, sizeof(drop_len));
+
+    num_t drop_y = 0;
+    num_t too_many = 2;
+
+    push_param_or_die(&drop_vm, &drop_y);
+    push_param_or_die(&drop_vm, drop_arr);
+    push_param_or_die(&drop_vm, &too_many);
+    push_param_or_die(&drop_vm, &mark);
+
+    run_func_expect(&drop_func, &drop_vm, VM_ARRAY_UNDERFLOW);
+
+    count_t actual_drop_len;
+    memcpy(&actual_drop_len, drop_arr, sizeof(actual_drop_len));
+    assert(drop_y == 77);
+    assert(actual_drop_len == 1);
+    assert(drop_vm.param_stack.len == ARG_COUNT);
+
+    vm_free_for_test(&drop_vm);
 }
 
 static void test_push_param_oom(void) {
@@ -830,6 +909,7 @@ static void test_array_push_at_and_drop(void) {
         ARG_TWO,
         ARG_IDX0,
         ARG_IDX1,
+        ARG_DROP_COUNT,
         ARG_COUNT,
     };
 
@@ -860,7 +940,8 @@ static void test_array_push_at_and_drop(void) {
         OP_ASSIGN_Y1,
 
         OP_PUSH_ARR_FOR_DROP,
-        OP_DROP_LAST,
+        OP_PUSH_DROP_COUNT,
+        OP_DROP_FROM_ARR,
 
         OP_COUNT,
     };
@@ -871,6 +952,7 @@ static void test_array_push_at_and_drop(void) {
         [ARG_TWO]  = {.var = {.tid = TYPE_INT_ID,        .name = "two"}},
         [ARG_IDX0] = {.var = {.tid = TYPE_INT_ID,        .name = "idx0"}},
         [ARG_IDX1] = {.var = {.tid = TYPE_INT_ID,        .name = "idx1"}},
+        [ARG_DROP_COUNT] = {.var = {.tid = TYPE_INT_ID,   .name = "drop_count"}},
     };
 
     static Var outs[] = {
@@ -884,6 +966,7 @@ static void test_array_push_at_and_drop(void) {
         [ARG_TWO]  = {.tid = TYPE_INT_ID,        .name = "two"},
         [ARG_IDX0] = {.tid = TYPE_INT_ID,        .name = "idx0"},
         [ARG_IDX1] = {.tid = TYPE_INT_ID,        .name = "idx1"},
+        [ARG_DROP_COUNT] = {.tid = TYPE_INT_ID,   .name = "drop_count"},
         [ARG_Y0]   = {.tid = TYPE_INT_ID,        .name = "y0"},
         [ARG_Y1]   = {.tid = TYPE_INT_ID,        .name = "y1"},
     };
@@ -910,7 +993,8 @@ static void test_array_push_at_and_drop(void) {
         [OP_ASSIGN_Y1]         = {.kind = OP_ASSIGN,   .extra = 0},
 
         [OP_PUSH_ARR_FOR_DROP] = {.kind = OP_PUSH_ARG, .extra = ARG_ARR},
-        [OP_DROP_LAST]         = {.kind = OP_ARR_DROP, .extra = 0},
+        [OP_PUSH_DROP_COUNT]   = {.kind = OP_PUSH_ARG, .extra = ARG_DROP_COUNT},
+        [OP_DROP_FROM_ARR]     = {.kind = OP_ARR_DROP, .extra = 0},
     };
 
     static Block blocks[] = {
@@ -926,7 +1010,7 @@ static void test_array_push_at_and_drop(void) {
     Func func = {
         .name = "test_array_push_at_and_drop",
         .sig = {
-            .ins = {.data = ins, .len = 5},
+            .ins = {.data = ins, .len = 6},
             .outs = {.data = outs, .len = 2},
             .can_crash = false,
         },
@@ -944,6 +1028,7 @@ static void test_array_push_at_and_drop(void) {
     num_t two = 22;
     num_t idx0 = 0;
     num_t idx1 = 1;
+    num_t drop_count = 2;
     num_t y0 = 0;
     num_t y1 = 0;
 
@@ -954,20 +1039,16 @@ static void test_array_push_at_and_drop(void) {
     push_param_or_die(&vm, &two);
     push_param_or_die(&vm, &idx0);
     push_param_or_die(&vm, &idx1);
+    push_param_or_die(&vm, &drop_count);
 
     run_func_or_die(&func, &vm);
 
     count_t len;
     memcpy(&len, arr, sizeof(len));
 
-    num_t first;
-    size_t data_offset = test_types[TYPE_INT_ARRAY4_ID].data.array.data_offset;
-    memcpy(&first, arr + data_offset, sizeof(first));
-
     assert(y0 == 11);
     assert(y1 == 22);
-    assert(len == 1);
-    assert(first == 11);
+    assert(len == 0);
     assert(vm.param_stack.len == 2);
 
     vm_free_for_test(&vm);

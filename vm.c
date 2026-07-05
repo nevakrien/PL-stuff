@@ -460,9 +460,11 @@ static bool compile_op(Compiler* c,OP op){
 	}
 
 	case OP_ARR_DROP:
-		if(c->params.len < 1) return false;
-		if(!type_idx_valid(types,TOP(c->params)) || types.data[TOP(c->params)].kind != TYPE_ARRAY) return false;
-		return emit_op(&c->code,B_ARR_DROP);
+		if(c->params.len < 2) return false;
+		if(c->params.data[c->params.len - 1] != TYPE_INT_ID) return false;
+		if(!type_idx_valid(types,c->params.data[c->params.len - 2]) || types.data[c->params.data[c->params.len - 2]].kind != TYPE_ARRAY) return false;
+		if(!emit_op(&c->code,B_ARR_DROP)) return false;
+		return pop_types(&c->params,1);
 
 	case OP_SLICE_FROM_AR: {
 		if(c->params.len < 2) return false;
@@ -1102,15 +1104,18 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 		}
 
 		case B_ARR_DROP: {
-			if(vm->param_stack.len < 1) return VM_PARAM_UNDERFLOW;
+			if(vm->param_stack.len < 2) return VM_PARAM_UNDERFLOW;
+			num_t amount;
+			memcpy(&amount,TOP(vm->param_stack),sizeof(amount));
+			vm->param_stack.len--;
 			char* arr = TOP(vm->param_stack);
 			count_t len;
 			memcpy(&len,arr,sizeof(len));
-			if(len == 0){
+			if(amount < 0 || (count_t)amount > len){
 				if(ans == VM_OK) ans = VM_ARRAY_UNDERFLOW;
 				goto crash;
 			}
-			len--;
+			len -= (count_t)amount;
 			memcpy(arr,&len,sizeof(len));
 			break;
 		}

@@ -47,9 +47,20 @@ Array operations work on fixed-capacity stack arrays:
 
 - `OP_ARR_PUSH` expects an array pointer and an element pointer of the array element type. It appends the element and crashes at runtime if the array is full.
 - `OP_ARR_AT` expects an array pointer and an `int` index pointer. It replaces those two entries with a pointer to the selected element and crashes at runtime if the index is out of bounds.
-- `OP_ARR_DROP` expects an array pointer and crashes at runtime if the array is empty.
+- `OP_ARR_DROP` expects an array pointer and an `int` count pointer. It drops that many elements from the end of the array and crashes at runtime if the count is negative or greater than the array length.
 
-Function calls and globals are still reserved/unfinished in the current IR design.
+Slice and view operations work on reference values laid out as `[ptr][len]`:
+
+- `OP_SLICE_FROM_AR` expects a slice/view destination pointer and an array pointer. It writes a reference to the array data and current array length into the destination.
+- `OP_SLICE_AT` expects a slice/view pointer and an `int` index pointer. It replaces those two entries with a pointer to the selected element and crashes at runtime if the index is out of bounds.
+- `OP_SLICE_INC` expects a mutable slice pointer and an `int` count pointer. It advances the slice data pointer by that many elements and crashes if the count is negative or greater than the slice length.
+- `OP_SLICE_DEC` expects a mutable slice pointer and an `int` count pointer. It reduces the slice length by that many elements and crashes if the count is negative or greater than the slice length.
+
+`OP_PUSH_GLOBAL` pushes a pointer to a global value. The global must exist, have a valid type, and contain non-null storage at runtime.
+
+`OP_CALL` expects output pointers followed by input pointers for the target function. On normal return, input pointers are discarded and output pointers remain on the caller's argument stack.
+
+`OP_CALL_NATIVE_ON_STACK` expects a native function pointer on top of the argument stack. The VM pops that pointer and calls it with the `VM*`; the native function is responsible for any additional stack effect.
 
 ## Blocks
 
@@ -124,7 +135,7 @@ Runtime crash examples:
 - Division by zero.
 - Array index out of bounds.
 - Pushing into a full fixed-capacity array.
-- Dropping from an empty array.
+- Dropping more elements from an array than it contains.
 - A soft crash with no installed crash pad.
 - Stack or local-storage corruption in a concrete implementation.
 
@@ -140,9 +151,11 @@ After the call writes to the outputs, only the output pointers remain on the sta
 
 ## Types
 
-The IR has four type kinds: `int`, `byte`, fixed-capacity stack arrays, and structs.
+The IR has these type kinds: `int`, `byte`, fixed-capacity stack arrays, slices, views, structs, and native function pointers.
 
 Arrays are values laid out as `[len][data...]`, where `len` is a `count_t` and `data` has room for the array capacity.
+
+Slices and views are values laid out as `[ptr][len]`. Slice mutation operations only accept `TYPE_SLICE`; indexing accepts both slices and views.
 
 Each type records three sizes:
 
