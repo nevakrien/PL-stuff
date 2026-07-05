@@ -978,6 +978,7 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			if(vm->param_stack.len < 2) return VM_PARAM_UNDERFLOW;
 			void* src = TOP(vm->param_stack);
 			vm->param_stack.len--;
+			//we could memcpy here (since semantically no alias) but we choose not to since this is a debug vm.
 			memmove(TOP(vm->param_stack),src,size);
 			break;
 		}
@@ -1042,6 +1043,7 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 				if(ans == VM_OK) ans = VM_ARRAY_CAPACITY;
 				goto crash;
 			}
+			//we could memcpy here (since semantically no alias) but we choose not to since this is a debug vm.
 			memmove(arr + data_offset + elem_size * len,elem,elem_size);
 			len++;
 			memcpy(arr,&len,sizeof(len));

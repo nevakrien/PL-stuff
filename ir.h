@@ -145,8 +145,8 @@ typedef enum OP_KIND : char {
 
     // OP_SLICE_FROM_AR,
     // OP_SLICE_AT,
-    // OP_SLICE_INC,//[data+=extra,len]
-    // OP_SLICE_DEC,//[data,len-=extra]
+    // OP_SLICE_INC,//[data+=x,len]
+    // OP_SLICE_DEC,//[data,len-=x]
 } OP_KIND;
 
 typedef struct OP {
