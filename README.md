@@ -3,9 +3,43 @@
 This repository is an experiment in a small tree-shaped IR and VM. The main design goal is to make cleanup reliable: `defer` blocks should run even when execution leaves through a crash or a non-local break.
 
 ```
-Defer ( Write y 5 ) in context {
-	
+Defer ( Write 5 Y ) in context {
+	all these lower case words are comments
+
+	hey here is a variable 
+	Var Y this is the scope {
+		Write 2 Y
+	}
+
+	we are out of scope our y is the old value
+	Crash
 }
+
+this will never happen since we crash 
+but y would be 5 since we defered
+```
+
+```
+While Y (Print "hello" the string is a global variable thats constnat)
+
+(Y; X; Write; X; ) using ; makes the compiler see it as end of stamtent
+so we pushed y then x then called write on a full stack
+note that the additional x left on the stack gets discarded by the compiler when we exit the () basic block
+
+If (Not Y) (X; DoThing)
+since there is no else we are done
+
+Write X Y y will now be assigned x
+```
+
+```
+functions are relativly striaght forward.
+the only thing which is somewhat weird is the stack based notation
+
+Func (Int X, Int Z) -> (Int Y) we are done with the sig
+  Write X into Y
+
+when calling this function x is on the top of the stack and y is at the bottom
 ```
 
 ## IR Model
@@ -109,7 +143,7 @@ Branches on a condition op range that must leave exactly one `int` value on the 
 
 ### `BLOCK_LOOP`
 
-Loops while a condition op range leaves a nonzero `int` value on the parameter stack. The condition value is consumed before entering either the body or the loop exit. If the body can fall through to the next iteration, it must restore the exact state from the loop head. This prevents loop bodies from accumulating stack entries, leaking locals, or changing active crash pads between iterations.
+Runs the body as an unconditional loop. If the body can fall through to the next iteration, it must restore the exact state from the loop head. This prevents loop bodies from accumulating stack entries, leaking locals, or changing active crash pads between iterations. Conditional loops are expressed inside the body, for example as `if cond {} else break;`, which also allows do-while loops by placing the check after the body work.
 
 ### `BLOCK_BREAK`
 

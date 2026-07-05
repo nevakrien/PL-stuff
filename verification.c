@@ -1,5 +1,5 @@
 #include <string.h>
-#include "front_end.h"
+#include "verification.h"
 
 static bool par_eq(Par a, Par b){
 	return a.kind == b.kind && a.idx == b.idx && a.parent == b.parent;
@@ -551,7 +551,6 @@ static int scan_block(CompileContext* ctx,ScanState* state,func_idx current,bloc
 		ctx->pars.len = before;
 		return scan_block(ctx,state,current,b.data.branch.no,handler,user);
 	case BLOCK_LOOP:
-		if(scan_condition(ctx,state,current,idx,b.data.loop.cond,handler,user)) return 1;
 		return scan_block(ctx,state,current,b.data.loop.body,handler,user);
 	case BLOCK_VAR:
 		if(b.data.var.var >= func->vars.len) return 1;

@@ -743,18 +743,6 @@ static CompileResult compile_loop(Compiler* c,Block b){
 		return COMPILE_FAIL;
 	}
 
-	if(!compile_cond(c,b.data.loop.cond)) goto fail;
-	if(!emit_op(&c->code,B_BRANCH_TOP)) goto fail;
-	if(!pop_types(&c->params,1)) goto fail;
-
-	size_t body_patch = c->code.len;
-	if(!emit_uoffset(&c->code,0)) goto fail;
-
-	size_t end_patch = c->code.len;
-	if(!emit_uoffset(&c->code,0)) goto fail;
-
-	if(!patch_uoffset(&c->code,body_patch,c->code.len)) goto fail;
-
 	CompileResult body_r = compile_block(c,b.data.loop.body);
 	if(body_r == COMPILE_FAIL) goto fail;
 
@@ -764,15 +752,12 @@ static CompileResult compile_loop(Compiler* c,Block b){
 		if(!emit_uoffset(&c->code,(uoffset_t)start)) goto fail;
 	}
 
-	if(!patch_uoffset(&c->code,end_patch,c->code.len)) goto fail;
-
 	bool had_breaks = false;
 	if(!scope_finish(c,c->code.len,&had_breaks)) goto fail;
-	(void)had_breaks;
 
 	if(!state_restore(c,&head)) goto fail;
 	state_free(&head);
-	return COMPILE_REACHABLE;
+	return had_breaks ? COMPILE_REACHABLE : COMPILE_UNREACHABLE;
 
 fail:
 	state_free(&head);

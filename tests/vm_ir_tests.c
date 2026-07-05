@@ -1356,6 +1356,7 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
         ARG_Y,
         ARG_AFTER,
         ARG_ONE,
+        ARG_ZERO,
         ARG_TWO,
         ARG_BAD,
         VAR_COND,
@@ -1370,6 +1371,8 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
         BLOCK_ASSIGN_AFTER_TWO,
         BLOCK_LOOP_BODY_MANY,
         BLOCK_ASSIGN_Y_ONE,
+        BLOCK_CHECK_COND,
+        BLOCK_CONTINUE_LOOP,
         BLOCK_BREAK_LOOP,
         BLOCK_ASSIGN_Y_BAD,
         BLOCK_COUNT,
@@ -1377,8 +1380,10 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
 
     enum {
         OP_INIT_PUSH_COND,
-        OP_INIT_PUSH_ONE,
+        OP_INIT_PUSH_ZERO,
         OP_INIT_ASSIGN_COND,
+
+        OP_CHECK_PUSH_COND,
 
         OP_Y_PUSH_Y,
         OP_Y_PUSH_ONE,
@@ -1397,6 +1402,7 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
 
     static SigInput ins[] = {
         [ARG_ONE] = {.var = {.tid = TYPE_INT_ID, .name = "one"}},
+        [ARG_ZERO] = {.var = {.tid = TYPE_INT_ID, .name = "zero"}},
         [ARG_TWO] = {.var = {.tid = TYPE_INT_ID, .name = "two"}},
         [ARG_BAD] = {.var = {.tid = TYPE_INT_ID, .name = "bad"}},
     };
@@ -1408,6 +1414,7 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
 
     static Var vars[] = {
         [ARG_ONE]   = {.tid = TYPE_INT_ID, .name = "one"},
+        [ARG_ZERO]  = {.tid = TYPE_INT_ID, .name = "zero"},
         [ARG_TWO]   = {.tid = TYPE_INT_ID, .name = "two"},
         [ARG_BAD]   = {.tid = TYPE_INT_ID, .name = "bad"},
         [ARG_Y]     = {.tid = TYPE_INT_ID, .name = "y"},
@@ -1417,8 +1424,10 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
 
     static OP ops[] = {
         [OP_INIT_PUSH_COND]  = {.kind = OP_PUSH_VAR, .extra = VAR_COND},
-        [OP_INIT_PUSH_ONE]   = {.kind = OP_PUSH_ARG, .extra = ARG_ONE},
+        [OP_INIT_PUSH_ZERO]  = {.kind = OP_PUSH_ARG, .extra = ARG_ZERO},
         [OP_INIT_ASSIGN_COND] = {.kind = OP_ASSIGN,  .extra = 0},
+
+        [OP_CHECK_PUSH_COND] = {.kind = OP_PUSH_VAR, .extra = VAR_COND},
 
         [OP_Y_PUSH_Y]        = {.kind = OP_PUSH_ARG, .extra = ARG_Y},
         [OP_Y_PUSH_ONE]      = {.kind = OP_PUSH_ARG, .extra = ARG_ONE},
@@ -1448,7 +1457,7 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
         },
         [BLOCK_LOOP_UNTIL_BREAK] = {
             .kind = BLOCK_LOOP,
-            .data.loop = {.cond = {.start = OP_INIT_PUSH_COND, .len = 1}, .body = BLOCK_LOOP_BODY_MANY},
+            .data.loop = {.body = BLOCK_LOOP_BODY_MANY},
         },
         [BLOCK_LOOP_BODY_MANY] = {
             .kind = BLOCK_MANY,
@@ -1457,6 +1466,14 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
         [BLOCK_ASSIGN_Y_ONE] = {
             .kind = BLOCK_BASIC,
             .data.basic = {.start = OP_Y_PUSH_Y, .len = 3},
+        },
+        [BLOCK_CHECK_COND] = {
+            .kind = BLOCK_BRANCH,
+            .data.branch = {.cond = {.start = OP_CHECK_PUSH_COND, .len = 1}, .yes = BLOCK_CONTINUE_LOOP, .no = BLOCK_BREAK_LOOP},
+        },
+        [BLOCK_CONTINUE_LOOP] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = 0, .len = 0},
         },
         [BLOCK_BREAK_LOOP] = {
             .kind = BLOCK_BREAK,
@@ -1475,7 +1492,7 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
     Func func = {
         .name = "test_loop_break_skips_unreachable_body_tail",
         .sig = {
-            .ins = {.data = ins, .len = 3},
+            .ins = {.data = ins, .len = 4},
             .outs = {.data = outs, .len = 2},
             
         },
@@ -1489,6 +1506,7 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
     vm_init_for_test(&vm, 1024, 32, 8);
 
     num_t one = 1;
+    num_t zero = 0;
     num_t two = 2;
     num_t bad = 99;
     num_t y = 0;
@@ -1497,6 +1515,7 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
     push_param_or_die(&vm, &y);
     push_param_or_die(&vm, &after);
     push_param_or_die(&vm, &one);
+    push_param_or_die(&vm, &zero);
     push_param_or_die(&vm, &two);
     push_param_or_die(&vm, &bad);
 

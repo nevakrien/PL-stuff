@@ -1,5 +1,5 @@
-#ifndef FRONT_END_H
-#define FRONT_END_H
+#ifndef VERIFICATION_H
+#define VERIFICATION_H
 
 #include "ir.h"
 #include "io.h"
@@ -263,4 +263,4 @@ typedef int (*AliasErrorReporter)(
 
 int borrow_check(AliasErrorReporter reporter,CompileContext* ctx);
 
-#endif // FRONT_END_H
+#endif // VERIFICATION_H

@@ -1,7 +1,7 @@
 #ifndef VM_H
 #define VM_H
 
-#include "front_end.h"
+#include "verification.h"
 
 typedef struct CrashFrame {
 	const ByteCode* pc;

@@ -35,7 +35,7 @@
 *.i*86
 *.x86_64
 *.hex
-tests/front_end_tests
+tests/verification_tests
 tests/vm_ir_tests
 
 # Debug files

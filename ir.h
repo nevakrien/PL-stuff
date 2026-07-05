@@ -226,7 +226,7 @@ typedef struct Block {
         struct {block_idx next; block_idx defer;} defer;//same as crash_pad
         struct {block_idx body; block_idx pad;} crash_pad;
         struct {OpRange cond; block_idx yes; block_idx no;} branch;
-        struct {OpRange cond; block_idx body;} loop;
+        struct {block_idx body;} loop;
         count_t level;
         struct {var_idx var; block_idx body;} var;
     } data;
