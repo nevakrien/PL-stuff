@@ -561,6 +561,17 @@ static CompileResult compile_basic(Compiler* c,Block b){
 	return COMPILE_REACHABLE;
 }
 
+static bool compile_cond(Compiler* c,OpRange cond){
+	if(cond.start > c->func->ops.len || cond.len > c->func->ops.len - cond.start) return false;
+	size_t start_params = c->params.len;
+	for(count_t i=0;i<cond.len;i++){
+		if(!compile_op(c,c->func->ops.data[cond.start + i])) return false;
+	}
+	if(c->params.len != start_params + 1) return false;
+	if(TOP(c->params) != TYPE_INT_ID) return false;
+	return true;
+}
+
 static CompileResult compile_break(Compiler* c,count_t level){
 	if(level == 0 || level > c->scopes.len) return COMPILE_FAIL;
 
@@ -641,18 +652,15 @@ static CompileResult compile_var(Compiler* c,Block b){
 }
 
 static CompileResult compile_branch(Compiler* c,Block b){
-	if(b.data.branch.cond >= c->func->vars.len) return COMPILE_FAIL;
-	if(!c->vars[b.data.branch.cond].live) return COMPILE_FAIL;
-	if(c->vars[b.data.branch.cond].tid != TYPE_INT_ID) return COMPILE_FAIL;
-
 	CompilerState before = {0};
 	CompilerState yes_state = {0};
 	CompilerState no_state = {0};
 
 	if(!state_save(c,&before)) return COMPILE_FAIL;
+	if(!compile_cond(c,b.data.branch.cond)) goto fail;
 
-	if(!emit_op(&c->code,B_BRANCH)) goto fail;
-	if(!emit_offset(&c->code,var_rel(c,b.data.branch.cond))) goto fail;
+	if(!emit_op(&c->code,B_BRANCH_TOP)) goto fail;
+	if(!pop_types(&c->params,1)) goto fail;
 
 	size_t yes_patch = c->code.len;
 	if(!emit_uoffset(&c->code,0)) goto fail;
@@ -724,10 +732,6 @@ fail:
 }
 
 static CompileResult compile_loop(Compiler* c,Block b){
-	if(b.data.loop.cond >= c->func->vars.len) return COMPILE_FAIL;
-	if(!c->vars[b.data.loop.cond].live) return COMPILE_FAIL;
-	if(c->vars[b.data.loop.cond].tid != TYPE_INT_ID) return COMPILE_FAIL;
-
 	size_t start = c->code.len;
 	offset_t frame = c->frame_size;
 
@@ -739,8 +743,9 @@ static CompileResult compile_loop(Compiler* c,Block b){
 		return COMPILE_FAIL;
 	}
 
-	if(!emit_op(&c->code,B_BRANCH)) goto fail;
-	if(!emit_offset(&c->code,var_rel(c,b.data.loop.cond))) goto fail;
+	if(!compile_cond(c,b.data.loop.cond)) goto fail;
+	if(!emit_op(&c->code,B_BRANCH_TOP)) goto fail;
+	if(!pop_types(&c->params,1)) goto fail;
 
 	size_t body_patch = c->code.len;
 	if(!emit_uoffset(&c->code,0)) goto fail;
@@ -1267,6 +1272,19 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 
 			num_t cond;
 			memcpy(&cond,vm->storage.data + vm->storage.len + cond_offset,sizeof(cond));
+			pc = base + (cond ? yes : no);
+			break;
+		}
+
+		case B_BRANCH_TOP: {
+			uoffset_t yes,no;
+			pc = read_uoffset(pc,&yes);
+			pc = read_uoffset(pc,&no);
+			if(vm->param_stack.len < 1) return VM_PARAM_UNDERFLOW;
+
+			num_t cond;
+			memcpy(&cond,TOP(vm->param_stack),sizeof(cond));
+			vm->param_stack.len--;
 			pc = base + (cond ? yes : no);
 			break;
 		}

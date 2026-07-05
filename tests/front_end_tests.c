@@ -94,6 +94,11 @@ static void expect_first_pass_ok(CompileContext* ctx){
 	comp_context_free(ctx);
 }
 
+static void expect_first_pass_rejected(CompileContext* ctx){
+	assert(type_check_first_pass(NULL,ctx) == 1);
+	comp_context_free(ctx);
+}
+
 static void expect_borrow_check(CompileContext* ctx,int expected){
 	assert(borrow_check(NULL,ctx) == expected);
 	comp_context_free(ctx);
@@ -398,6 +403,36 @@ static void test_stack_underflow_rejected_in_first_pass(void){
 	expect_first_pass_error(&ctx,TYPE_CHECK_ERROR_STACK_UNDERFLOW);
 }
 
+static void test_loop_condition_must_leave_int(void){
+	TypeS types = fresh_types();
+	Var vars[] = {{.name = "x", .tid = TYPE_INT_ID}};
+	OP ops[] = {
+		{.kind = OP_PUSH_VAR,.extra = 0},
+		{.kind = OP_DROP,.extra = 1},
+	};
+	Block blocks[] = {
+		{.kind = BLOCK_LOOP,.data.loop = {.cond = {.start = 0,.len = 2},.body = 1}},
+		{.kind = BLOCK_HARD_CRASH},
+	};
+	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 2},.ops = {.data = ops,.len = 2},.vars = {.data = vars,.len = 1}}};
+	CompileContext ctx = make_ctx(funcs,1);
+	expect_first_pass_rejected(&ctx);
+}
+
+static void test_branch_condition_must_leave_int(void){
+	TypeS types = fresh_types();
+	Var vars[] = {{.name = "x", .tid = TYPE_BYTE_ID}};
+	OP ops[] = {{.kind = OP_PUSH_VAR,.extra = 0}};
+	Block blocks[] = {
+		{.kind = BLOCK_BRANCH,.data.branch = {.cond = {.start = 0,.len = 1},.yes = 1,.no = 2}},
+		{.kind = BLOCK_HARD_CRASH},
+		{.kind = BLOCK_HARD_CRASH},
+	};
+	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 3},.ops = {.data = ops,.len = 1},.vars = {.data = vars,.len = 1}}};
+	CompileContext ctx = make_ctx(funcs,1);
+	expect_first_pass_rejected(&ctx);
+}
+
 static void test_invalid_local_rejected_in_first_pass(void){
 	TypeS types = fresh_types();
 	OP ops[] = {{.kind = OP_PUSH_VAR,.extra = 0}};
@@ -460,6 +495,10 @@ int main(void){
 	puts("ok: test_slice_from_wrong_array_type_rejected_in_first_pass");
 	test_stack_underflow_rejected_in_first_pass();
 	puts("ok: test_stack_underflow_rejected_in_first_pass");
+	test_loop_condition_must_leave_int();
+	puts("ok: test_loop_condition_must_leave_int");
+	test_branch_condition_must_leave_int();
+	puts("ok: test_branch_condition_must_leave_int");
 	test_invalid_local_rejected_in_first_pass();
 	puts("ok: test_invalid_local_rejected_in_first_pass");
 	test_invalid_global_rejected_in_first_pass();

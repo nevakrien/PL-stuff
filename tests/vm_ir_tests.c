@@ -1448,7 +1448,7 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
         },
         [BLOCK_LOOP_UNTIL_BREAK] = {
             .kind = BLOCK_LOOP,
-            .data.loop = {.cond = VAR_COND, .body = BLOCK_LOOP_BODY_MANY},
+            .data.loop = {.cond = {.start = OP_INIT_PUSH_COND, .len = 1}, .body = BLOCK_LOOP_BODY_MANY},
         },
         [BLOCK_LOOP_BODY_MANY] = {
             .kind = BLOCK_MANY,
@@ -2141,6 +2141,140 @@ static void test_native_call_output_feeds_function_call(void) {
     vm_free_for_test(&vm);
 }
 
+static void test_branch_with_computed_condition(void) {
+    enum {
+        ARG_Y,
+        ARG_X,
+        ARG_MASK,
+        ARG_YES,
+        ARG_NO,
+        ARG_COUNT,
+    };
+
+    enum {
+        BLOCK_BRANCH_ROOT,
+        BLOCK_YES,
+        BLOCK_NO,
+        BLOCK_COUNT,
+    };
+
+    enum {
+        OP_COND_PUSH_X,
+        OP_COND_PUSH_MASK,
+        OP_COND_AND,
+
+        OP_YES_PUSH_Y,
+        OP_YES_PUSH_VALUE,
+        OP_YES_ASSIGN,
+
+        OP_NO_PUSH_Y,
+        OP_NO_PUSH_VALUE,
+        OP_NO_ASSIGN,
+        OP_COUNT,
+    };
+
+    static SigInput ins[] = {
+        [ARG_X] = {.var = {.tid = TYPE_INT_ID, .name = "x"}, .mut = true},
+        [ARG_MASK] = {.var = {.tid = TYPE_INT_ID, .name = "mask"}},
+        [ARG_YES] = {.var = {.tid = TYPE_INT_ID, .name = "yes"}},
+        [ARG_NO] = {.var = {.tid = TYPE_INT_ID, .name = "no"}},
+    };
+
+    static Var outs[] = {
+        {.tid = TYPE_INT_ID, .name = "y"},
+    };
+
+    static Var vars[] = {
+        [ARG_Y] = {.tid = TYPE_INT_ID, .name = "y"},
+        [ARG_X] = {.tid = TYPE_INT_ID, .name = "x"},
+        [ARG_MASK] = {.tid = TYPE_INT_ID, .name = "mask"},
+        [ARG_YES] = {.tid = TYPE_INT_ID, .name = "yes"},
+        [ARG_NO] = {.tid = TYPE_INT_ID, .name = "no"},
+    };
+
+    static OP ops[] = {
+        [OP_COND_PUSH_X]    = {.kind = OP_PUSH_ARG,   .extra = ARG_X},
+        [OP_COND_PUSH_MASK] = {.kind = OP_PUSH_ARG,   .extra = ARG_MASK},
+        [OP_COND_AND]       = {.kind = OP_AND_ASSIGN, .extra = 0},
+
+        [OP_YES_PUSH_Y]     = {.kind = OP_PUSH_ARG, .extra = ARG_Y},
+        [OP_YES_PUSH_VALUE] = {.kind = OP_PUSH_ARG, .extra = ARG_YES},
+        [OP_YES_ASSIGN]     = {.kind = OP_ASSIGN,   .extra = 0},
+
+        [OP_NO_PUSH_Y]      = {.kind = OP_PUSH_ARG, .extra = ARG_Y},
+        [OP_NO_PUSH_VALUE]  = {.kind = OP_PUSH_ARG, .extra = ARG_NO},
+        [OP_NO_ASSIGN]      = {.kind = OP_ASSIGN,   .extra = 0},
+    };
+
+    static Block blocks[] = {
+        [BLOCK_BRANCH_ROOT] = {
+            .kind = BLOCK_BRANCH,
+            .data.branch = {
+                .cond = {.start = OP_COND_PUSH_X, .len = 3},
+                .yes = BLOCK_YES,
+                .no = BLOCK_NO,
+            },
+        },
+        [BLOCK_YES] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = OP_YES_PUSH_Y, .len = 3},
+        },
+        [BLOCK_NO] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = OP_NO_PUSH_Y, .len = 3},
+        },
+    };
+
+    Func func = {
+        .name = "test_branch_with_computed_condition",
+        .sig = {
+            .ins = {.data = ins, .len = 4},
+            .outs = {.data = outs, .len = 1},
+        },
+        .types = test_type_slice(),
+        .blocks = {.data = blocks, .len = BLOCK_COUNT},
+        .ops = {.data = ops, .len = OP_COUNT},
+        .vars = {.data = vars, .len = ARG_COUNT},
+    };
+
+    VmCode code = vm_compile_no_defers(&func, NULL);
+    assert(code.data);
+
+    VM vm;
+    vm_init_for_test(&vm, 1024, 8, 8);
+    num_t y = 0;
+    num_t x = 3;
+    num_t mask = 1;
+    num_t yes = 11;
+    num_t no = 22;
+    push_param_or_die(&vm, &y);
+    push_param_or_die(&vm, &x);
+    push_param_or_die(&vm, &mask);
+    push_param_or_die(&vm, &yes);
+    push_param_or_die(&vm, &no);
+    assert(vm_run(&vm, code.data) == VM_OK);
+    assert(y == yes);
+    assert(x == 1);
+    assert(vm.param_stack.len == 1);
+    vm_free_for_test(&vm);
+
+    vm_init_for_test(&vm, 1024, 8, 8);
+    y = 0;
+    x = 2;
+    push_param_or_die(&vm, &y);
+    push_param_or_die(&vm, &x);
+    push_param_or_die(&vm, &mask);
+    push_param_or_die(&vm, &yes);
+    push_param_or_die(&vm, &no);
+    assert(vm_run(&vm, code.data) == VM_OK);
+    assert(y == no);
+    assert(x == 0);
+    assert(vm.param_stack.len == 1);
+    vm_free_for_test(&vm);
+
+    vm_code_free(&code);
+}
+
 int main(void) {
     test_push_param_oom();
     puts("ok: test_push_param_oom");
@@ -2192,6 +2326,9 @@ int main(void) {
 
     test_native_call_output_feeds_function_call();
     puts("ok: test_native_call_output_feeds_function_call");
+
+    test_branch_with_computed_condition();
+    puts("ok: test_branch_with_computed_condition");
 
     puts("all vm/ir tests passed");
     return 0;

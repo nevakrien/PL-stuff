@@ -410,11 +410,12 @@ static bool handle_add_hold(CompileContext* ctx,par_idx owner,par_idx held,CodeL
 	return true;
 }
 
-static int scan_basic(CompileContext* ctx,ScanState* state,func_idx current,block_idx block,Block b,ScanOp handler,void* user){
+static int scan_ops(CompileContext* ctx,ScanState* state,func_idx current,block_idx block,OpRange ops,ScanOp handler,void* user,bool reset_stack){
 	Func* func = &ctx->funcs.data[current];
+	if(ops.start > func->ops.len || ops.len > func->ops.len - ops.start) return 1;
 	size_t start = ctx->pars.len;
-	for(count_t i = 0;i < b.data.basic.len;i++){
-		op_idx opi = b.data.basic.start + i;
+	for(count_t i = 0;i < ops.len;i++){
+		op_idx opi = ops.start + i;
 		OP op = func->ops.data[opi];
 		CodeLoc loc = {.block = block,.op = opi};
 		if(handler){
@@ -500,7 +501,21 @@ static int scan_basic(CompileContext* ctx,ScanState* state,func_idx current,bloc
 		}
 	}
 	if(ctx->pars.len < start) return 1;
-	ctx->pars.len = start;
+	if(reset_stack) ctx->pars.len = start;
+	return 0;
+}
+
+static int scan_basic(CompileContext* ctx,ScanState* state,func_idx current,block_idx block,Block b,ScanOp handler,void* user){
+	return scan_ops(ctx,state,current,block, b.data.basic,handler,user,true);
+}
+
+static int scan_condition(CompileContext* ctx,ScanState* state,func_idx current,block_idx block,OpRange cond,ScanOp handler,void* user){
+	Func* func = &ctx->funcs.data[current];
+	size_t before = ctx->pars.len;
+	if(scan_ops(ctx,state,current,block,cond,handler,user,false)) return 1;
+	if(ctx->pars.len != before + 1) return 1;
+	if(!par_is_int(ctx,func,TOP(ctx->pars))) return 1;
+	ctx->pars.len = before;
 	return 0;
 }
 
@@ -531,10 +546,12 @@ static int scan_block(CompileContext* ctx,ScanState* state,func_idx current,bloc
 		ctx->pars.len = before;
 		return scan_block(ctx,state,current,b.data.crash_pad.pad,handler,user);
 	case BLOCK_BRANCH:
+		if(scan_condition(ctx,state,current,idx,b.data.branch.cond,handler,user)) return 1;
 		if(scan_block(ctx,state,current,b.data.branch.yes,handler,user)) return 1;
 		ctx->pars.len = before;
 		return scan_block(ctx,state,current,b.data.branch.no,handler,user);
 	case BLOCK_LOOP:
+		if(scan_condition(ctx,state,current,idx,b.data.loop.cond,handler,user)) return 1;
 		return scan_block(ctx,state,current,b.data.loop.body,handler,user);
 	case BLOCK_VAR:
 		if(b.data.var.var >= func->vars.len) return 1;

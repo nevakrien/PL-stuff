@@ -211,17 +211,22 @@ typedef enum BLOCK_KIND : count_t {
 
 typedef SLICE(OP) OPS;
 
+typedef struct OpRange {
+	op_idx start;
+	count_t len;
+} OpRange;
+
 //this is a tree stored as a flat DAG 
 //it can be loaded directly from disk
 typedef struct Block {    
 	BLOCK_KIND kind;
     union {
-        struct {block_idx start; count_t len;} basic;
+        OpRange basic;
         struct {block_idx start; count_t len;} many;
         struct {block_idx next; block_idx defer;} defer;//same as crash_pad
         struct {block_idx body; block_idx pad;} crash_pad;
-        struct {var_idx cond; block_idx yes; block_idx no;} branch;
-        struct {var_idx cond; block_idx body;} loop;
+        struct {OpRange cond; block_idx yes; block_idx no;} branch;
+        struct {OpRange cond; block_idx body;} loop;
         count_t level;
         struct {var_idx var; block_idx body;} var;
     } data;
@@ -252,6 +257,7 @@ typedef enum ByteCode : char {
 	B_ARR_DROP,
 	B_JUMP,
 	B_BRANCH,
+	B_BRANCH_TOP,
 	B_PUSH_CRASH,
 	B_POP_CRASH,
 	B_CRASH,

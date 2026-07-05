@@ -2,6 +2,12 @@
 
 This repository is an experiment in a small tree-shaped IR and VM. The main design goal is to make cleanup reliable: `defer` blocks should run even when execution leaves through a crash or a non-local break.
 
+```
+Defer ( Write y 5 ) in context {
+	
+}
+```
+
 ## IR Model
 
 A function is a tree of `Block`s stored in a flat array. Block `0` is the entry block. Leaving block `0` normally is a return; return values are written through output pointers rather than being returned on the argument stack.
@@ -99,11 +105,11 @@ Crash pads are mostly an internal lowering target for defers.
 
 ### `BLOCK_BRANCH`
 
-Branches on a live `int` local variable. Both reachable arms must leave the IR state identical: same stack types, same live variables, same local-storage size, and same crash-pad depth. If the states differ, the IR is illegal.
+Branches on a condition op range that must leave exactly one `int` value on the parameter stack. The condition value is consumed by the branch. Both reachable arms must leave the IR state identical: same stack types, same live variables, same local-storage size, and same crash-pad depth. If the states differ, the IR is illegal.
 
 ### `BLOCK_LOOP`
 
-Loops while a live `int` local variable is nonzero. If the body can fall through to the next iteration, it must restore the exact state from the loop head. This prevents loop bodies from accumulating stack entries, leaking locals, or changing active crash pads between iterations.
+Loops while a condition op range leaves a nonzero `int` value on the parameter stack. The condition value is consumed before entering either the body or the loop exit. If the body can fall through to the next iteration, it must restore the exact state from the loop head. This prevents loop bodies from accumulating stack entries, leaking locals, or changing active crash pads between iterations.
 
 ### `BLOCK_BREAK`
 
@@ -126,7 +132,7 @@ Statically illegal examples:
 - Recursive or invalid type definitions.
 - A basic block that overpops its entry stack.
 - An operation whose operands have the wrong type or are missing.
-- A branch or loop condition that is not a live `int` variable.
+- A branch or loop condition range that does not leave exactly one `int` value on the parameter stack.
 - Branch arms that rejoin with different IR states.
 - A loop body that reaches the next iteration with a different IR state than the loop head.
 - A `break` with level `0` or with a level greater than the active scope depth.
