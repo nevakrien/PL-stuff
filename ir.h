@@ -20,20 +20,17 @@
 #define SCOUNT_TYPE int
 #endif
 
-#ifndef LIFE_TYPE
-#define LIFE_TYPE size_t
-#endif
-
-
 typedef NUMERIC_TYPE num_t;
 typedef OFFSET_TYPE offset_t;
 typedef OFFSET_UNSIGNED_TYPE uoffset_t;
 typedef COUNT_TYPE count_t;
 typedef SCOUNT_TYPE scount_t;
-typedef LIFE_TYPE life_t;
 
-static const life_t LIFE_FREE = 0;
-static const life_t LIFE_MUT = -1;
+typedef enum life_t : char {
+    LIFE_FREE,
+    LIFE_UNIQUE,
+    LIFE_SHARED,
+} life_t;
 
 typedef count_t op_idx;
 typedef count_t block_idx;
@@ -100,6 +97,7 @@ typedef SLICE(TypeField) TypeFieldS;
 typedef struct Type {
     TYPE_KIND kind;
     const char* name;
+    bool is_portal;
     size_t payload_size;
     size_t size;
     size_t align;
@@ -308,11 +306,11 @@ static inline Type type_array(type_idx elem,count_t capacity){
 }
 
 static inline Type type_slice(type_idx elem){
-    return (Type){.kind=TYPE_SLICE,.name="Slice",.size=0,.align=0,.data.ref={.elem=elem}};
+    return (Type){.kind=TYPE_SLICE,.name="Slice",.is_portal=true,.size=0,.align=0,.data.ref={.elem=elem}};
 }
 
 static inline Type type_view(type_idx elem){
-    return (Type){.kind=TYPE_VIEW,.name="View",.size=0,.align=0,.data.ref={.elem=elem}};
+    return (Type){.kind=TYPE_VIEW,.name="View",.is_portal=true,.size=0,.align=0,.data.ref={.elem=elem}};
 }
 
 static inline Type type_struct(const char* name,TypeFieldS fields){

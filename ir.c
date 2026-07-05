@@ -38,6 +38,7 @@ static bool type_layout_one(TypeS types,type_idx tid,TypeLayoutState* states){
 		if(!type_layout_one(types,elem_tid,states)) return false;
 
 		Type elem = types.data[elem_tid];
+		type->is_portal = elem.is_portal;
 		size_t len_size = sizeof(count_t);
 		size_t data_offset = align_up(len_size,elem.align);
 		type->align = elem.align > alignof(count_t) ? elem.align : alignof(count_t);
@@ -49,6 +50,7 @@ static bool type_layout_one(TypeS types,type_idx tid,TypeLayoutState* states){
 	case TYPE_SLICE:
 	case TYPE_VIEW:
 		if(!type_layout_one(types,type->data.ref.elem,states)) return false;
+		type->is_portal = true;
 		type->payload_size = type_slice_payload_size();
 		type->align = alignof(void*) > alignof(count_t) ? alignof(void*) : alignof(count_t);
 		break;
@@ -57,12 +59,14 @@ static bool type_layout_one(TypeS types,type_idx tid,TypeLayoutState* states){
 		size_t offset = 0;
 		size_t max_align = 1;
 		TypeFieldS fields = type->data.fields;
+		type->is_portal = false;
 
 		for(size_t i=0;i<fields.len;i++){
 			type_idx field_tid = fields.data[i].tid;
 			if(!type_layout_one(types,field_tid,states)) return false;
 
 			Type field_type = types.data[field_tid];
+			if(field_type.is_portal) type->is_portal = true;
 			offset = align_up(offset,field_type.align);
 			fields.data[i].offset = offset;
 			offset += field_type.payload_size;

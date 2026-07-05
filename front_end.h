@@ -95,16 +95,34 @@ typedef int (*ProcessCall)(
 	CodeLoc loc
 );
 
-int comp_run_calls(CompileContext* ctx,ProcessCall f);
+int comp_run_calls(CompileContext* ctx,ProcessCall f,void* user);
 
 
 
-int gather_holds(CompileContext* ctx,ProcessCall error_reporter);
+typedef enum PortalErrorKind : char {
+	PORTAL_ERROR_NON_LOCAL,
+	PORTAL_ERROR_BACKING_SCOPE,
+} PortalErrorKind;
+
+typedef struct PortalError {
+	PortalErrorKind kind;
+	par_idx portal;
+	par_idx backing;
+	CodeLoc loc;
+} PortalError;
+
+typedef int (*PortalErrorReporter)(
+	void* user,
+	CompileContext* ctx,
+	const PortalError error
+);
+
+int gather_portal_regions(PortalErrorReporter reporter,CompileContext* ctx);
 
 
 typedef struct AliasError {
-	hold_idx first_mut;//non null
-	hold_idx second;//non null
+	par_idx first_mut;
+	par_idx second;
 
 	CodeLoc call;
 } AliasError;

@@ -150,7 +150,19 @@ Builtin-style calls conceptually take outputs first, then inputs, then the funct
 outputs, inputs, FUNC
 ```
 
-After the call writes to the outputs, only the output pointers remain on the stack. Outputs may not alias any other argument, whether input or output. A struct field aliases the containing struct.
+After the call writes to the outputs, only the output pointers remain on the stack. Outputs are unique mutable borrows and may not conflict with any other argument, whether input or output. Mutable inputs are also unique mutable borrows. Non-mutable inputs are shared borrows and may overlap other shared borrows.
+
+Borrow expansion is directional. Borrowing a value may also borrow values owned by or reached through it, but borrowing a child does not necessarily borrow its parent.
+
+- Borrowing a struct value borrows all of its fields recursively.
+- Borrowing a struct field borrows that field's subtree, not the containing struct.
+- Distinct struct fields may be borrowed by the same call as long as neither borrow includes their common parent.
+- Borrowing an array element borrows the array value, because the selected element is generally a runtime fact.
+- Borrowing a slice or view also borrows the backing data it points at.
+
+Slices and views are portal types: they contain a pointer and length into some backing region. A portal may only be retargeted in the function scope that created it. This keeps portal lifetime analysis local: every pointer written into the portal must be live in the portal's creation scope, and passing the portal to another function scope cannot make it point somewhere else.
+
+When a portal is passed to a call, the call borrows both the portal value and its backing data. A view borrows the backing data as shared. A slice passed as a non-mutable input borrows the backing data as shared; a slice passed as a mutable input borrows the backing data mutably.
 
 ## Types
 
