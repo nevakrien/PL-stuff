@@ -180,6 +180,15 @@ static bool par_is_portal(CompileContext* ctx,const Func* func,par_idx idx){
 	return type_idx_valid(func->types,tid) && func->types.data[tid].is_portal;
 }
 
+static const Sig* native_sig_on_stack(CompileContext* ctx,const Func* func){
+	if(ctx->pars.len < 1) return NULL;
+	type_idx tid = par_type(ctx,func,TOP(ctx->pars));
+	if(!type_idx_valid(func->types,tid)) return NULL;
+	Type* type = &func->types.data[tid];
+	if(type->kind != TYPE_NATIVE_FUNC_POINTER) return NULL;
+	return &type->data.sig;
+}
+
 static bool portal_retargetable(CompileContext* ctx,const Func* func,par_idx idx){
 	type_idx tid = par_type(ctx,func,idx);
 	return type_idx_valid(func->types,tid) && func->types.data[tid].is_portal && par_root_is_local(ctx,idx);
@@ -295,8 +304,13 @@ static int scan_basic(CompileContext* ctx,ScanState* state,func_idx current,bloc
 			ctx->pars.len -= callee->sig.ins.len;
 			break;
 		}
-		case OP_CALL_NATIVE_ON_STACK:
-			return 1;
+		case OP_CALL_NATIVE_ON_STACK: {
+			const Sig* sig = native_sig_on_stack(ctx,func);
+			if(!sig) return 1;
+			if(ctx->pars.len < sig->outs.len + sig->ins.len + 1) return 1;
+			ctx->pars.len -= sig->ins.len + 1;
+			break;
+		}
 		}
 	}
 	if(ctx->pars.len < start) return 1;
@@ -564,21 +578,14 @@ static int borrow_par(BorrowCtx* b,CompileContext* ctx,const Func* func,par_idx 
 	return 0;
 }
 
-static int borrow_check_call(void* user,CompileContext* ctx,const ScanState* state,func_idx current,OP op,CodeLoc loc){
-	(void)state;
-	if(op.kind != OP_CALL) return 0;
-	if(op.extra >= ctx->funcs.len) return 1;
-	Func* caller = &ctx->funcs.data[current];
-	Func* callee = &ctx->funcs.data[op.extra];
-	count_t outs = (count_t)callee->sig.outs.len;
-	count_t ins = (count_t)callee->sig.ins.len;
-	if(ctx->pars.len < outs + ins) return 1;
+static int borrow_check_sig(BorrowCtx* b,CompileContext* ctx,const Func* caller,const Sig* sig,size_t base,CodeLoc loc){
+	count_t outs = (count_t)sig->outs.len;
+	count_t ins = (count_t)sig->ins.len;
+	if(ctx->pars.len < base + outs + ins) return 1;
 
 	for(size_t i = 0;i < ctx->handles.len;i++) ctx->handles.data[i].life = LIFE_FREE;
-	BorrowCtx* b = user;
 	b->first_mut = PAR_IDX_INVALID;
 
-	count_t base = (count_t)(ctx->pars.len - outs - ins);
 	for(count_t i = 0;i < outs;i++){
 		b->first_mut = ctx->pars.data[base + i];
 		int r = borrow_par(b,ctx,caller,b->first_mut,LIFE_UNIQUE,loc);
@@ -586,13 +593,39 @@ static int borrow_check_call(void* user,CompileContext* ctx,const ScanState* sta
 	}
 	for(count_t i = 0;i < ins;i++){
 		par_idx par = ctx->pars.data[base + outs + i];
-		life_t want = callee->sig.ins.data[i].mut ? LIFE_UNIQUE : LIFE_SHARED;
+		life_t want = sig->ins.data[i].mut ? LIFE_UNIQUE : LIFE_SHARED;
 		type_idx tid = par_type(ctx,caller,par);
 		if(want == LIFE_UNIQUE && (!type_idx_valid(caller->types,tid) || caller->types.data[tid].is_portal)) return 1;
 		if(want == LIFE_UNIQUE) b->first_mut = par;
 		int r = borrow_par(b,ctx,caller,par,want,loc);
 		if(r) return r;
 	}
+	return 0;
+}
+
+static int borrow_check_call(void* user,CompileContext* ctx,const ScanState* state,func_idx current,OP op,CodeLoc loc){
+	(void)state;
+	Func* caller = &ctx->funcs.data[current];
+	BorrowCtx* b = user;
+
+	if(op.kind == OP_CALL){
+		if(op.extra >= ctx->funcs.len) return 1;
+		Func* callee = &ctx->funcs.data[op.extra];
+		count_t outs = (count_t)callee->sig.outs.len;
+		count_t ins = (count_t)callee->sig.ins.len;
+		if(ctx->pars.len < outs + ins) return 1;
+		return borrow_check_sig(b,ctx,caller,&callee->sig,ctx->pars.len - outs - ins,loc);
+	}
+
+	if(op.kind == OP_CALL_NATIVE_ON_STACK){
+		const Sig* sig = native_sig_on_stack(ctx,caller);
+		if(!sig) return 1;
+		count_t outs = (count_t)sig->outs.len;
+		count_t ins = (count_t)sig->ins.len;
+		if(ctx->pars.len < outs + ins + 1) return 1;
+		return borrow_check_sig(b,ctx,caller,sig,ctx->pars.len - 1 - outs - ins,loc);
+	}
+
 	return 0;
 }
 

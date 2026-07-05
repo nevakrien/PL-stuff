@@ -61,7 +61,7 @@ Slice and view operations work on reference values laid out as `[ptr][len]`:
 
 `OP_CALL` expects output pointers followed by input pointers for the target function. On normal return, input pointers are discarded and output pointers remain on the caller's argument stack.
 
-`OP_CALL_NATIVE_ON_STACK` expects a native function pointer on top of the argument stack. The VM pops that pointer and calls it with the `VM*`; the native function is responsible for any additional stack effect.
+`OP_CALL_NATIVE_ON_STACK` expects output pointers, input pointers, then a native function pointer. The native pointer's `TYPE_NATIVE_FUNC_POINTER` type carries the call `Sig`. The VM pops the function pointer, calls it with the `VM*`, then discards the declared input pointers on normal return, leaving declared output pointers on the stack.
 
 `OP_STRUCT_AT` expects a struct pointer. It replaces that entry with a pointer to the field selected by `extra`.
 
@@ -166,7 +166,7 @@ When a portal is passed to a call, the call borrows both the portal value and it
 
 ## Types
 
-The IR has these type kinds: `int`, `byte`, fixed-capacity stack arrays, slices, views, structs, and native function pointers.
+The IR has these type kinds: `int`, `byte`, fixed-capacity stack arrays, slices, views, structs, and native function pointers. Native function pointer types carry their frontend-visible call signature in `Type.data.sig`.
 
 Arrays are values laid out as `[len][data...]`, where `len` is a `count_t` and `data` has room for the array capacity.
 

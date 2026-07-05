@@ -363,6 +363,30 @@ static bool compile_func_call(Compiler* c,count_t idx){
 	return pop_types(&c->params,(count_t)func->sig.ins.len);
 }
 
+static bool compile_native_call(Compiler* c){
+	TypeS types = c->func->types;
+	if(c->params.len < 1) return false;
+	type_idx fn_tid = TOP(c->params);
+	if(!type_idx_valid(types,fn_tid)) return false;
+	Type fn_type = types.data[fn_tid];
+	if(fn_type.kind != TYPE_NATIVE_FUNC_POINTER) return false;
+
+	Sig sig = fn_type.data.sig;
+	if(c->params.len < sig.outs.len + sig.ins.len + 1) return false;
+	size_t start = c->params.len - 1 - sig.outs.len - sig.ins.len;
+	for(size_t i=0;i<sig.outs.len;i++){
+		if(c->params.data[start + i] != sig.outs.data[i].tid) return false;
+	}
+	for(size_t i=0;i<sig.ins.len;i++){
+		if(c->params.data[start + sig.outs.len + i] != sig.ins.data[i].var.tid) return false;
+	}
+	if(sig.ins.len > (count_t)-1) return false;
+
+	if(!emit_op(&c->code,B_CALL_NATIVE)) return false;
+	if(!emit_count(&c->code,(count_t)sig.ins.len)) return false;
+	return pop_types(&c->params,(count_t)sig.ins.len + 1);
+}
+
 static bool compile_op(Compiler* c,OP op){
 	TypeS types = c->func->types;
 	switch(op.kind){
@@ -373,11 +397,7 @@ static bool compile_op(Compiler* c,OP op){
 		return compile_func_call(c,op.extra);
 
 	case OP_CALL_NATIVE_ON_STACK:
-		if(c->params.len < 1) return false;
-		if(!type_idx_valid(types,TOP(c->params))) return false;
-		if(types.data[TOP(c->params)].kind != TYPE_NATIVE_FUNC_POINTER) return false;
-		if(!emit_op(&c->code,B_CALL_NATIVE)) return false;
-		return pop_types(&c->params,1);
+		return compile_native_call(c);
 
 	case OP_ASSIGN: {
 		if(c->params.len < 2) return false;
@@ -1284,10 +1304,13 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 		}
 
 		case B_CALL_NATIVE: {
+			count_t argc;
+			pc = read_count(pc,&argc);
 			if(vm->param_stack.len < 1) return VM_PARAM_UNDERFLOW;
 			VmNativeFunc fn = NULL;
 			memcpy(&fn,TOP(vm->param_stack),sizeof(fn));
 			vm->param_stack.len--;
+			if(vm->param_stack.len < argc) return VM_PARAM_UNDERFLOW;
 			if(!fn) return VM_NULL_NATIVE_FUNC;
 			VM_RESULT r = fn(vm);
 			if(r == VM_CRASH){
@@ -1299,6 +1322,8 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 				goto crash;
 			}
 			if(r != VM_OK) return r;
+			if(vm->param_stack.len < argc) return VM_PARAM_UNDERFLOW;
+			vm->param_stack.len -= argc;
 			break;
 		}
 

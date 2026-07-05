@@ -79,7 +79,7 @@ typedef enum TYPE_KIND : char {
     TYPE_SLICE,
     TYPE_VIEW,
     TYPE_STRUCT,
-    TYPE_NATIVE_FUNC_POINTER,// function with signature (VM*)->VM_RESULT
+    TYPE_NATIVE_FUNC_POINTER,// native VM callback carrying an IR Sig in data.sig
 } TYPE_KIND;
 
 typedef struct TypeField {
@@ -94,6 +94,23 @@ typedef struct TypeRef {
 
 typedef SLICE(TypeField) TypeFieldS;
 
+typedef struct Var {
+    type_idx tid;//TYPE_INVALID_ID means no var
+	const char* name;
+} Var;
+
+typedef struct SigInput {
+    Var var;
+    bool mut;
+} SigInput;
+
+typedef SLICE(Var) VarS;
+
+typedef struct Sig {
+    SLICE(SigInput) ins;
+    SLICE(Var) outs;
+} Sig;
+
 typedef struct Type {
     TYPE_KIND kind;
     const char* name;
@@ -107,6 +124,7 @@ typedef struct Type {
         // Slices and views are values laid out as [ptr][len].
         TypeRef ref;
         TypeFieldS fields;
+        Sig sig;
     } data;
 } Type;
 
@@ -133,7 +151,7 @@ typedef enum OP_KIND : char {
     OP_NULL=0,             // ( -- ) null-terminator
 
     OP_CALL,               // ( outs..., ins... -- outs... ) extra=func id
-    OP_CALL_NATIVE_ON_STACK,// ( args..., native_fn -- results... ) native decides stack effect
+    OP_CALL_NATIVE_ON_STACK,// ( outs..., ins..., native_fn -- outs... ) native_fn type supplies Sig
 
     OP_ASSIGN,             // ( dst src -- dst ) *dst = *src
     OP_ADD_ASSIGN,         // ( dst src -- dst ) *dst += *src
@@ -191,23 +209,7 @@ typedef enum BLOCK_KIND : count_t {
 
 
 
-typedef struct Var {
-    type_idx tid;//TYPE_INVALID_ID means no var
-	const char* name;
-} Var;
-
-typedef struct SigInput {
-    Var var;
-    bool mut;
-} SigInput;
-
-typedef SLICE(Var) VarS;
 typedef SLICE(OP) OPS;
-
-typedef struct Sig {
-    SLICE(SigInput) ins;
-    SLICE(Var) outs;
-} Sig;
 
 //this is a tree stored as a flat DAG 
 //it can be loaded directly from disk

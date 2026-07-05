@@ -79,6 +79,12 @@ static bool type_layout_one(TypeS types,type_idx tid,TypeLayoutState* states){
 	}
 
 	case TYPE_NATIVE_FUNC_POINTER:
+		for(size_t i=0;i<type->data.sig.outs.len;i++){
+			if(!type_idx_valid(types,type->data.sig.outs.data[i].tid)) return false;
+		}
+		for(size_t i=0;i<type->data.sig.ins.len;i++){
+			if(!type_idx_valid(types,type->data.sig.ins.data[i].var.tid)) return false;
+		}
 		type->payload_size = sizeof(void*);
 		type->align = alignof(void*);
 		break;

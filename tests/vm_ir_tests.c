@@ -10,6 +10,14 @@ static TypeField test_pair_fields[] = {
     [1] = {.name = "second", .tid = TYPE_INT_ID},
 };
 
+static Var native_assign_outs[] = {
+    {.tid = TYPE_INT_ID, .name = "out"},
+};
+
+static SigInput native_assign_ins[] = {
+    {.var = {.tid = TYPE_INT_ID, .name = "in"}},
+};
+
 static Type test_types[] = {
     [0] = {
         .kind = TYPE_INT,
@@ -39,6 +47,10 @@ static Type test_types[] = {
         .payload_size = sizeof(VmNativeFunc),
         .size = sizeof(VmNativeFunc),
         .align = alignof(VmNativeFunc),
+        .data.sig = {
+            .ins = {.data = native_assign_ins, .len = 1},
+            .outs = {.data = native_assign_outs, .len = 1},
+        },
     },
     [4] = {
         .kind = TYPE_SLICE,
@@ -1981,21 +1993,30 @@ static void test_callee_crash_unwinds_to_caller_pad(void) {
     vm_free_for_test(&vm);
 }
 
-static VM_RESULT native_assign_99(VM* vm) {
-    if(vm->param_stack.len < 1) return VM_PARAM_UNDERFLOW;
-    num_t x = 99;
-    memcpy(TOP(vm->param_stack), &x, sizeof(x));
+static VM_RESULT native_add_99(VM* vm) {
+    if(vm->param_stack.len < 2) return VM_PARAM_UNDERFLOW;
+    num_t in = 0;
+    memcpy(&in, vm->param_stack.data[vm->param_stack.len - 1], sizeof(in));
+    num_t out = in + 99;
+    memcpy(vm->param_stack.data[vm->param_stack.len - 2], &out, sizeof(out));
     return VM_OK;
 }
 
-static void test_native_call_from_global(void) {
+static void test_native_call_output_feeds_function_call(void) {
     enum {
         ARG_Y,
+        ARG_X,
         ARG_COUNT,
     };
 
     enum {
+        FUNC_INCREMENT,
+        FUNC_COUNT,
+    };
+
+    enum {
         GLOBAL_NATIVE,
+        GLOBAL_ONE,
         GLOBAL_COUNT,
     };
 
@@ -2006,9 +2027,19 @@ static void test_native_call_from_global(void) {
 
     enum {
         OP_PUSH_Y,
+        OP_PUSH_X,
         OP_PUSH_NATIVE,
         OP_CALL_NATIVE,
+        OP_CALL_INCREMENT,
         OP_COUNT,
+    };
+
+    static SigInput caller_ins[] = {
+        {.var = {.tid = TYPE_INT_ID, .name = "x"}},
+    };
+
+    static SigInput increment_ins[] = {
+        {.var = {.tid = TYPE_INT_ID, .name = "x"}, .mut = true},
     };
 
     static Var outs[] = {
@@ -2017,44 +2048,78 @@ static void test_native_call_from_global(void) {
 
     static Var vars[] = {
         [ARG_Y] = {.tid = TYPE_INT_ID, .name = "y"},
+        [ARG_X] = {.tid = TYPE_INT_ID, .name = "x"},
     };
 
-    static OP ops[] = {
-        [OP_PUSH_Y]      = {.kind = OP_PUSH_ARG,             .extra = ARG_Y},
-        [OP_PUSH_NATIVE] = {.kind = OP_PUSH_GLOBAL,          .extra = GLOBAL_NATIVE},
-        [OP_CALL_NATIVE] = {.kind = OP_CALL_NATIVE_ON_STACK, .extra = 0},
+    static OP caller_ops[] = {
+        [OP_PUSH_Y]        = {.kind = OP_PUSH_ARG,             .extra = ARG_Y},
+        [OP_PUSH_X]        = {.kind = OP_PUSH_ARG,             .extra = ARG_X},
+        [OP_PUSH_NATIVE]   = {.kind = OP_PUSH_GLOBAL,          .extra = GLOBAL_NATIVE},
+        [OP_CALL_NATIVE]   = {.kind = OP_CALL_NATIVE_ON_STACK, .extra = 0},
+        [OP_CALL_INCREMENT] = {.kind = OP_CALL,                .extra = FUNC_INCREMENT},
+    };
+
+    static OP increment_ops[] = {
+        [0] = {.kind = OP_PUSH_ARG,    .extra = 0},
+        [1] = {.kind = OP_PUSH_GLOBAL, .extra = GLOBAL_ONE},
+        [2] = {.kind = OP_ADD_ASSIGN,  .extra = 0},
     };
 
     static Block blocks[] = {
         [BLOCK_ROOT] = {
             .kind = BLOCK_BASIC,
-            .data.basic = {.start = OP_PUSH_Y, .len = 3},
+            .data.basic = {.start = OP_PUSH_Y, .len = OP_COUNT},
         },
     };
 
-    VmNativeFunc native = native_assign_99;
+    static Block increment_blocks[] = {
+        [BLOCK_ROOT] = {
+            .kind = BLOCK_BASIC,
+            .data.basic = {.start = 0, .len = 3},
+        },
+    };
+
+    VmNativeFunc native = native_add_99;
+    num_t one = 1;
     Global globals[] = {
         [GLOBAL_NATIVE] = {
             .var = {.tid = TYPE_NATIVE_FUNC_POINTER_ID, .name = "native"},
             .mem = &native,
             .is_mut = false,
         },
+        [GLOBAL_ONE] = {
+            .var = {.tid = TYPE_INT_ID, .name = "one"},
+            .mem = &one,
+            .is_mut = false,
+        },
+    };
+
+    Func funcs[] = {
+        [FUNC_INCREMENT] = {
+            .name = "increment",
+            .sig = {.ins = {.data = increment_ins, .len = 1}},
+            .types = test_type_slice(),
+            .blocks = {.data = increment_blocks, .len = BLOCK_COUNT},
+            .ops = {.data = increment_ops, .len = 3},
+            .vars = {.data = vars, .len = 1},
+        },
     };
 
     CompileContext ctx = {
         .globals = {.data = globals, .len = GLOBAL_COUNT, .cap = GLOBAL_COUNT},
+        .funcs = {.data = funcs, .len = FUNC_COUNT, .cap = FUNC_COUNT},
     };
 
     Func func = {
-        .name = "test_native_call_from_global",
+        .name = "test_native_call_output_feeds_function_call",
         .sig = {
-            .ins = {.data = NULL, .len = 0},
+            .ins = {.data = caller_ins, .len = 1},
             .outs = {.data = outs, .len = 1},
             
         },
         .types = test_type_slice(),
         .blocks = {.data = blocks, .len = BLOCK_COUNT},
-        .ops = {.data = ops, .len = OP_COUNT},
+        .ops = {.data = caller_ops, .len = OP_COUNT},
         .vars = {.data = vars, .len = ARG_COUNT},
     };
 
@@ -2062,15 +2127,22 @@ static void test_native_call_from_global(void) {
     vm_init_for_test(&vm, 1024, 8, 8);
 
     num_t y = 0;
+    num_t x = 23;
     push_param_or_die(&vm, &y);
+    push_param_or_die(&vm, &x);
 
     VmCode code = vm_compile_no_defers(&func, &ctx);
     assert(code.data);
+    assert(ctx.code.len == FUNC_COUNT);
+    assert(ctx.code.data[FUNC_INCREMENT].data);
     assert(vm_run(&vm, code.data) == VM_OK);
 
-    assert(y == 99);
+    assert(y == 123);
+    assert(vm.param_stack.len == 1);
 
     free(code.data);
+    for(size_t i=0;i<ctx.code.len;i++) free(ctx.code.data[i].data);
+    free(ctx.code.data);
     vm_free_for_test(&vm);
 }
 
@@ -2123,8 +2195,8 @@ int main(void) {
     test_callee_crash_unwinds_to_caller_pad();
     puts("ok: test_callee_crash_unwinds_to_caller_pad");
 
-    test_native_call_from_global();
-    puts("ok: test_native_call_from_global");
+    test_native_call_output_feeds_function_call();
+    puts("ok: test_native_call_output_feeds_function_call");
 
     puts("all vm/ir tests passed");
     return 0;

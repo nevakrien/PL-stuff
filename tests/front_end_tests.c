@@ -10,6 +10,8 @@ enum {
 	TYPE_SLICE_BOX_ID = 4,
 	TYPE_SLICE_ARRAY_ID = 5,
 	TYPE_PAIR_ID = 6,
+	TYPE_NATIVE_CONFLICT_ID = 7,
+	TYPE_NATIVE_IO_ID = 8,
 };
 
 static TypeField slice_box_fields[] = {
@@ -21,6 +23,19 @@ static TypeField pair_fields[] = {
 	[1] = {.name = "second", .tid = TYPE_INT_ID},
 };
 
+static SigInput native_conflict_ins[] = {
+	{.var = {.name = "mut", .tid = TYPE_INT_ID}, .mut = true},
+	{.var = {.name = "shared", .tid = TYPE_INT_ID}, .mut = false},
+};
+
+static SigInput native_io_ins[] = {
+	{.var = {.name = "in", .tid = TYPE_INT_ID}},
+};
+
+static Var native_io_outs[] = {
+	{.name = "out", .tid = TYPE_INT_ID},
+};
+
 static Type test_types_template[] = {
 	[0] = {.kind = TYPE_INT, .name = "int", .payload_size = sizeof(num_t), .align = alignof(num_t)},
 	[1] = {.kind = TYPE_BYTE, .name = "byte", .payload_size = 1, .align = 1},
@@ -29,6 +44,8 @@ static Type test_types_template[] = {
 	[TYPE_SLICE_BOX_ID] = {.kind = TYPE_STRUCT, .name = "SliceBox", .data.fields = {.data = slice_box_fields, .len = 1}},
 	[TYPE_SLICE_ARRAY_ID] = {.kind = TYPE_ARRAY, .name = "Slice[int][2]", .data.array = {.elem = TYPE_INT_SLICE_ID, .capacity = 2}},
 	[TYPE_PAIR_ID] = {.kind = TYPE_STRUCT, .name = "Pair", .data.fields = {.data = pair_fields, .len = 2}},
+	[TYPE_NATIVE_CONFLICT_ID] = {.kind = TYPE_NATIVE_FUNC_POINTER, .name = "native_conflict", .data.sig = {.ins = {.data = native_conflict_ins, .len = 2}}},
+	[TYPE_NATIVE_IO_ID] = {.kind = TYPE_NATIVE_FUNC_POINTER, .name = "native_io", .data.sig = {.ins = {.data = native_io_ins, .len = 1}, .outs = {.data = native_io_outs, .len = 1}}},
 };
 
 static Type test_types[sizeof(test_types_template) / sizeof(test_types_template[0])];
@@ -236,6 +253,48 @@ static void test_struct_parent_conflicts_with_field(void){
 	assert(borrow_check(NULL,&ctx) == 1);
 }
 
+static void test_native_signature_borrow_checked(void){
+	TypeS types = fresh_types();
+	Var vars[] = {{.name = "x", .tid = TYPE_INT_ID}};
+	Global globals[] = {{.var = {.name = "native", .tid = TYPE_NATIVE_CONFLICT_ID}}};
+	OP ops[] = {
+		{.kind = OP_PUSH_VAR,.extra = 0},
+		{.kind = OP_PUSH_VAR,.extra = 0},
+		{.kind = OP_PUSH_GLOBAL,.extra = 0},
+		{.kind = OP_CALL_NATIVE_ON_STACK},
+	};
+	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
+	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 4},.vars = {.data = vars,.len = 1}}};
+	CompileContext ctx = make_ctx(funcs,1);
+	ctx.globals = (GlobalS){.data = globals,.len = 1,.cap = 1};
+	assert(borrow_check(NULL,&ctx) == 1);
+}
+
+static void test_native_output_feeds_function_borrow_checked(void){
+	TypeS types = fresh_types();
+	Var vars[] = {
+		{.name = "y", .tid = TYPE_INT_ID},
+		{.name = "x", .tid = TYPE_INT_ID},
+	};
+	SigInput callee_ins[] = {{.var = {.name = "y", .tid = TYPE_INT_ID}, .mut = true}};
+	Global globals[] = {{.var = {.name = "native", .tid = TYPE_NATIVE_IO_ID}}};
+	OP ops[] = {
+		{.kind = OP_PUSH_VAR,.extra = 0},
+		{.kind = OP_PUSH_VAR,.extra = 1},
+		{.kind = OP_PUSH_GLOBAL,.extra = 0},
+		{.kind = OP_CALL_NATIVE_ON_STACK},
+		{.kind = OP_CALL,.extra = 1},
+	};
+	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
+	Func funcs[] = {
+		{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 5},.vars = {.data = vars,.len = 2}},
+		{.name = "callee",.types = types,.sig.ins = {.data = callee_ins,.len = 1}},
+	};
+	CompileContext ctx = make_ctx(funcs,2);
+	ctx.globals = (GlobalS){.data = globals,.len = 1,.cap = 1};
+	assert(borrow_check(NULL,&ctx) == 0);
+}
+
 int main(void){
 	test_recursive_portal_types();
 	puts("ok: test_recursive_portal_types");
@@ -255,6 +314,10 @@ int main(void){
 	puts("ok: test_distinct_struct_fields_can_borrow_mut");
 	test_struct_parent_conflicts_with_field();
 	puts("ok: test_struct_parent_conflicts_with_field");
+	test_native_signature_borrow_checked();
+	puts("ok: test_native_signature_borrow_checked");
+	test_native_output_feeds_function_borrow_checked();
+	puts("ok: test_native_output_feeds_function_borrow_checked");
 	puts("all frontend tests passed");
 	return 0;
 }
