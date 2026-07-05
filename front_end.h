@@ -184,6 +184,7 @@ typedef struct CompileContext {
 
 
 void comp_context_reset(CompileContext* ctx);
+void comp_context_free(CompileContext* ctx);
 par_idx comp_context_intern_par(CompileContext* ctx, Par par);
 
 typedef int (*ProcessCall)(

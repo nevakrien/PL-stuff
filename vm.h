@@ -45,6 +45,7 @@ typedef VM_RESULT (*VmNativeFunc)(VM*);
 
 VmCode vm_compile_no_defers(const Func* func,CompileContext* ctx);//note func may not be from funcs.
 VM_RESULT vm_run(VM* vm,const ByteCode* code);
+void vm_free(VM* vm);
 
 static inline VM_RESULT vm_push_param(VM* vm, void* param){
 	if(vm->param_stack.len>=vm->param_stack.cap) return VM_OOM_PARAM;

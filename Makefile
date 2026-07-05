@@ -1,5 +1,5 @@
 CC ?= cc
-CFLAGS ?= -std=c2x -Wall -Wextra -g
+CFLAGS ?= -std=c2x -Wall -Wextra -g -fsanitize=address
 
 HEADERS = vm.h ir.h front_end.h
 VM_IR_TEST_BIN := tests/vm_ir_tests

@@ -1,5 +1,16 @@
 #include "ir.h"
 
+void vm_code_free(VmCode* code){
+	free(code->data);
+	*code = (VmCode){0};
+}
+
+void vm_func_s_free(VmFuncS* funcs){
+	for(size_t i = 0; i < funcs->len; i++) vm_code_free(&funcs->data[i]);
+	free(funcs->data);
+	*funcs = (VmFuncS){0};
+}
+
 typedef STACK(count_t) EpiStack;
 
 typedef enum TypeLayoutState : char {

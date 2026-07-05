@@ -86,6 +86,15 @@ void comp_context_reset(CompileContext* ctx){
 	par_idx_table_reset(&ctx->par_idxs);
 }
 
+void comp_context_free(CompileContext* ctx){
+	vm_func_s_free(&ctx->code);
+	free(ctx->handles.data);
+	free(ctx->holds.data);
+	par_idx_table_free(&ctx->par_idxs);
+	free(ctx->pars.data);
+	*ctx = (CompileContext){0};
+}
+
 par_idx comp_context_intern_par(CompileContext* ctx, Par par){
 	par_idx idx = PAR_IDX_INVALID;
 	if(par_idx_table_get(&ctx->par_idxs, par, &idx)) return idx;

@@ -104,10 +104,7 @@ static void vm_init_for_test(VM* vm, size_t storage_cap, size_t param_cap, size_
 }
 
 static void vm_free_for_test(VM* vm) {
-    free(vm->storage.data);
-    free(vm->param_stack.data);
-    free(vm->crash_stack.data);
-    memset(vm, 0, sizeof(*vm));
+    vm_free(vm);
 }
 
 static void push_param_or_die(VM* vm, void* ptr) {
@@ -123,7 +120,7 @@ static void run_func_or_die(Func* func, VM* vm) {
     VM_RESULT result = vm_run(vm, code.data);
     assert(result == VM_OK);
 
-    free(code.data);
+    vm_code_free(&code);
 }
 
 static void run_func_expect(Func* func, VM* vm, VM_RESULT expected) {
@@ -134,7 +131,7 @@ static void run_func_expect(Func* func, VM* vm, VM_RESULT expected) {
     VM_RESULT result = vm_run(vm, code.data);
     assert(result == expected);
 
-    free(code.data);
+    vm_code_free(&code);
 }
 
 /*
@@ -616,7 +613,7 @@ static void test_uncaught_crash_returns_vm_crash(void) {
     assert(result == VM_CRASH);
 
     vm_free_for_test(&vm);
-    free(code.data);
+    vm_code_free(&code);
 }
 
 static void test_hard_crash_returns_vm_hard_crash(void) {
@@ -1738,7 +1735,8 @@ static void test_push_global_assigns_value(void) {
 
     assert(y == x);
 
-    free(code.data);
+    vm_code_free(&code);
+    vm_func_s_free(&ctx.code);
     vm_free_for_test(&vm);
 }
 
@@ -1846,9 +1844,8 @@ static void test_compiled_function_call(void) {
 
     assert(y == x);
 
-    free(code.data);
-    for(size_t i=0;i<ctx.code.len;i++) free(ctx.code.data[i].data);
-    free(ctx.code.data);
+    vm_code_free(&code);
+    vm_func_s_free(&ctx.code);
     vm_free_for_test(&vm);
 }
 
@@ -1987,9 +1984,8 @@ static void test_callee_crash_unwinds_to_caller_pad(void) {
     assert(y == mark);
     assert(vm.param_stack.len == ARG_COUNT);
 
-    free(code.data);
-    for(size_t i=0;i<ctx.code.len;i++) free(ctx.code.data[i].data);
-    free(ctx.code.data);
+    vm_code_free(&code);
+    vm_func_s_free(&ctx.code);
     vm_free_for_test(&vm);
 }
 
@@ -2140,9 +2136,8 @@ static void test_native_call_output_feeds_function_call(void) {
     assert(y == 123);
     assert(vm.param_stack.len == 1);
 
-    free(code.data);
-    for(size_t i=0;i<ctx.code.len;i++) free(ctx.code.data[i].data);
-    free(ctx.code.data);
+    vm_code_free(&code);
+    vm_func_s_free(&ctx.code);
     vm_free_for_test(&vm);
 }
 

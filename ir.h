@@ -271,6 +271,9 @@ typedef enum ByteCode : char {
 typedef SLICE(ByteCode) VmCode;
 typedef STACK(VmCode) VmFuncS;
 
+void vm_code_free(VmCode* code);
+void vm_func_s_free(VmFuncS* funcs);
+
 
 typedef struct Func {
     const char* name;

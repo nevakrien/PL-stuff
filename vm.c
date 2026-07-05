@@ -943,6 +943,13 @@ static bool storage_push_return(VM* vm,ReturnFrame ret){
 	return true;
 }
 
+void vm_free(VM* vm){
+	free(vm->storage.data);
+	free(vm->param_stack.data);
+	free(vm->crash_stack.data);
+	*vm = (VM){0};
+}
+
 static bool storage_pop_return(VM* vm,ReturnFrame* ret){
 	if(vm->storage.len < sizeof(*ret)) return false;
 	vm->storage.len -= sizeof(*ret);

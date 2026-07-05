@@ -86,6 +86,17 @@ static void expect_first_pass_error(CompileContext* ctx,TypeCheckErrorKind kind)
 	active_type_check_report = NULL;
 	assert(report.count == 1);
 	assert(report.last.kind == kind);
+	comp_context_free(ctx);
+}
+
+static void expect_first_pass_ok(CompileContext* ctx){
+	assert(type_check_first_pass(NULL,ctx) == 0);
+	comp_context_free(ctx);
+}
+
+static void expect_borrow_check(CompileContext* ctx,int expected){
+	assert(borrow_check(NULL,ctx) == expected);
+	comp_context_free(ctx);
 }
 
 static Block one_basic(size_t len){
@@ -115,7 +126,7 @@ static void test_local_slice_retarget_allowed(void){
 	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
 	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 3},.vars = {.data = vars,.len = 2}}};
 	CompileContext ctx = make_ctx(funcs,1);
-	assert(borrow_check(NULL,&ctx) == 0);
+	expect_borrow_check(&ctx,0);
 }
 
 static void test_local_portal_assign_allowed(void){
@@ -132,7 +143,7 @@ static void test_local_portal_assign_allowed(void){
 	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
 	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 3},.vars = {.data = vars,.len = 2}}};
 	CompileContext ctx = make_ctx(funcs,1);
-	assert(type_check_first_pass(NULL,&ctx) == 0);
+	expect_first_pass_ok(&ctx);
 }
 
 static void test_non_local_slice_retarget_reported(void){
@@ -166,7 +177,7 @@ static void test_local_struct_containing_portal_assign_allowed(void){
 	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
 	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 3},.vars = {.data = vars,.len = 2}}};
 	CompileContext ctx = make_ctx(funcs,1);
-	assert(type_check_first_pass(NULL,&ctx) == 0);
+	expect_first_pass_ok(&ctx);
 }
 
 static void test_portal_backing_scope_reported(void){
@@ -204,7 +215,7 @@ static void test_mut_portal_input_rejected(void){
 		{.name = "callee",.types = types,.sig.ins = {.data = callee_ins,.len = 1}},
 	};
 	CompileContext ctx = make_ctx(funcs,2);
-	assert(borrow_check(NULL,&ctx) == 1);
+	expect_borrow_check(&ctx,1);
 }
 
 static void test_distinct_struct_fields_can_borrow_mut(void){
@@ -227,7 +238,7 @@ static void test_distinct_struct_fields_can_borrow_mut(void){
 		{.name = "callee",.types = types,.sig.ins = {.data = callee_ins,.len = 2}},
 	};
 	CompileContext ctx = make_ctx(funcs,2);
-	assert(borrow_check(NULL,&ctx) == 0);
+	expect_borrow_check(&ctx,0);
 }
 
 static void test_struct_parent_conflicts_with_field(void){
@@ -249,7 +260,7 @@ static void test_struct_parent_conflicts_with_field(void){
 		{.name = "callee",.types = types,.sig.ins = {.data = callee_ins,.len = 2}},
 	};
 	CompileContext ctx = make_ctx(funcs,2);
-	assert(borrow_check(NULL,&ctx) == 1);
+	expect_borrow_check(&ctx,1);
 }
 
 static void test_native_signature_borrow_checked(void){
@@ -266,7 +277,7 @@ static void test_native_signature_borrow_checked(void){
 	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 4},.vars = {.data = vars,.len = 1}}};
 	CompileContext ctx = make_ctx(funcs,1);
 	ctx.globals = (GlobalS){.data = globals,.len = 1,.cap = 1};
-	assert(borrow_check(NULL,&ctx) == 1);
+	expect_borrow_check(&ctx,1);
 }
 
 static void test_native_output_feeds_function_borrow_checked(void){
@@ -291,7 +302,7 @@ static void test_native_output_feeds_function_borrow_checked(void){
 	};
 	CompileContext ctx = make_ctx(funcs,2);
 	ctx.globals = (GlobalS){.data = globals,.len = 1,.cap = 1};
-	assert(borrow_check(NULL,&ctx) == 0);
+	expect_borrow_check(&ctx,0);
 }
 
 static void test_call_type_mismatch_rejected_in_first_pass(void){
