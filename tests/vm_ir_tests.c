@@ -270,9 +270,10 @@ static void test_crash_pad_writes_y1_but_not_y2_after_crash(void) {
 
     enum {
         BLOCK_ROOT,
-        BLOCK_BODY_MANY,
-        BLOCK_BODY_CRASH,
-        BLOCK_BODY_AFTER_CRASH,
+		BLOCK_BODY_MANY,
+		BLOCK_BODY_CHAIN,
+		BLOCK_BODY_CRASH,
+		BLOCK_BODY_AFTER_CRASH,
         BLOCK_PAD,
         BLOCK_COUNT,
     };
@@ -332,13 +333,18 @@ static void test_crash_pad_writes_y1_but_not_y2_after_crash(void) {
             },
         },
 
-        [BLOCK_BODY_MANY] = {
-            .kind = BLOCK_MANY,
-            .data.many = {
-                .start = BLOCK_BODY_CRASH,
-                .len = 2,
-            },
-        },
+		[BLOCK_BODY_MANY] = {
+			.kind = BLOCK_MANY,
+			.data.chain = {
+				.cur = BLOCK_BODY_CRASH,
+				.next = BLOCK_BODY_CHAIN,
+			},
+		},
+
+		[BLOCK_BODY_CHAIN] = {
+			.kind = BLOCK_CHAIN,
+			.data.chain = {.cur = BLOCK_BODY_AFTER_CRASH, .next = BLOCK_INVALID},
+		},
 
         [BLOCK_BODY_CRASH] = {
             .kind = BLOCK_CRASH,
@@ -1364,13 +1370,17 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
     };
 
     enum {
-        BLOCK_ROOT,
-        BLOCK_ROOT_MANY,
-        BLOCK_INIT_COND,
-        BLOCK_LOOP_UNTIL_BREAK,
-        BLOCK_ASSIGN_AFTER_TWO,
-        BLOCK_LOOP_BODY_MANY,
-        BLOCK_ASSIGN_Y_ONE,
+		BLOCK_ROOT,
+		BLOCK_ROOT_MANY,
+		BLOCK_ROOT_CHAIN_LOOP,
+		BLOCK_ROOT_CHAIN_AFTER,
+		BLOCK_INIT_COND,
+		BLOCK_LOOP_UNTIL_BREAK,
+		BLOCK_ASSIGN_AFTER_TWO,
+		BLOCK_LOOP_BODY_MANY,
+		BLOCK_LOOP_BODY_CHAIN_CHECK,
+		BLOCK_LOOP_BODY_CHAIN_BAD,
+		BLOCK_ASSIGN_Y_ONE,
         BLOCK_CHECK_COND,
         BLOCK_CONTINUE_LOOP,
         BLOCK_BREAK_LOOP,
@@ -1447,10 +1457,18 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
             .kind = BLOCK_VAR,
             .data.var = {.var = VAR_COND, .body = BLOCK_ROOT_MANY},
         },
-        [BLOCK_ROOT_MANY] = {
-            .kind = BLOCK_MANY,
-            .data.many = {.start = BLOCK_INIT_COND, .len = 3},
-        },
+		[BLOCK_ROOT_MANY] = {
+			.kind = BLOCK_MANY,
+			.data.chain = {.cur = BLOCK_INIT_COND, .next = BLOCK_ROOT_CHAIN_LOOP},
+		},
+		[BLOCK_ROOT_CHAIN_LOOP] = {
+			.kind = BLOCK_CHAIN,
+			.data.chain = {.cur = BLOCK_LOOP_UNTIL_BREAK, .next = BLOCK_ROOT_CHAIN_AFTER},
+		},
+		[BLOCK_ROOT_CHAIN_AFTER] = {
+			.kind = BLOCK_CHAIN,
+			.data.chain = {.cur = BLOCK_ASSIGN_AFTER_TWO, .next = BLOCK_INVALID},
+		},
         [BLOCK_INIT_COND] = {
             .kind = BLOCK_BASIC,
             .data.basic = {.start = OP_INIT_PUSH_COND, .len = 3},
@@ -1459,10 +1477,18 @@ static void test_loop_break_skips_unreachable_body_tail(void) {
             .kind = BLOCK_LOOP,
             .data.loop = {.body = BLOCK_LOOP_BODY_MANY},
         },
-        [BLOCK_LOOP_BODY_MANY] = {
-            .kind = BLOCK_MANY,
-            .data.many = {.start = BLOCK_ASSIGN_Y_ONE, .len = 3},
-        },
+		[BLOCK_LOOP_BODY_MANY] = {
+			.kind = BLOCK_MANY,
+			.data.chain = {.cur = BLOCK_ASSIGN_Y_ONE, .next = BLOCK_LOOP_BODY_CHAIN_CHECK},
+		},
+		[BLOCK_LOOP_BODY_CHAIN_CHECK] = {
+			.kind = BLOCK_CHAIN,
+			.data.chain = {.cur = BLOCK_CHECK_COND, .next = BLOCK_LOOP_BODY_CHAIN_BAD},
+		},
+		[BLOCK_LOOP_BODY_CHAIN_BAD] = {
+			.kind = BLOCK_CHAIN,
+			.data.chain = {.cur = BLOCK_ASSIGN_Y_BAD, .next = BLOCK_INVALID},
+		},
         [BLOCK_ASSIGN_Y_ONE] = {
             .kind = BLOCK_BASIC,
             .data.basic = {.start = OP_Y_PUSH_Y, .len = 3},
@@ -1537,13 +1563,17 @@ static void test_nested_many_break_skips_outer_tail(void) {
         ARG_COUNT,
     };
 
-    enum {
-        BLOCK_ROOT,
-        BLOCK_ASSIGN_ONE,
-        BLOCK_OUTER_MANY,
-        BLOCK_ASSIGN_THREE,
-        BLOCK_INNER_MANY,
-        BLOCK_ASSIGN_BAD,
+		enum {
+			BLOCK_ROOT,
+			BLOCK_ROOT_CHAIN_OUTER,
+			BLOCK_ROOT_CHAIN_THREE,
+			BLOCK_ASSIGN_ONE,
+			BLOCK_OUTER_MANY,
+			BLOCK_OUTER_CHAIN_BAD,
+			BLOCK_ASSIGN_THREE,
+			BLOCK_INNER_MANY,
+			BLOCK_INNER_CHAIN_BREAK,
+			BLOCK_ASSIGN_BAD,
         BLOCK_ASSIGN_TWO,
         BLOCK_BREAK_OUTER,
         BLOCK_COUNT,
@@ -1607,22 +1637,38 @@ static void test_nested_many_break_skips_outer_tail(void) {
     };
 
     static Block blocks[] = {
-        [BLOCK_ROOT] = {
-            .kind = BLOCK_MANY,
-            .data.many = {.start = BLOCK_ASSIGN_ONE, .len = 3},
-        },
+		[BLOCK_ROOT] = {
+			.kind = BLOCK_MANY,
+			.data.chain = {.cur = BLOCK_ASSIGN_ONE, .next = BLOCK_ROOT_CHAIN_OUTER},
+		},
+		[BLOCK_ROOT_CHAIN_OUTER] = {
+			.kind = BLOCK_CHAIN,
+			.data.chain = {.cur = BLOCK_OUTER_MANY, .next = BLOCK_ROOT_CHAIN_THREE},
+		},
+		[BLOCK_ROOT_CHAIN_THREE] = {
+			.kind = BLOCK_CHAIN,
+			.data.chain = {.cur = BLOCK_ASSIGN_THREE, .next = BLOCK_INVALID},
+		},
         [BLOCK_ASSIGN_ONE] = {
             .kind = BLOCK_BASIC,
             .data.basic = {.start = OP_ONE_PUSH_Y, .len = 3},
         },
-        [BLOCK_OUTER_MANY] = {
-            .kind = BLOCK_MANY,
-            .data.many = {.start = BLOCK_INNER_MANY, .len = 2},
-        },
-        [BLOCK_INNER_MANY] = {
-            .kind = BLOCK_MANY,
-            .data.many = {.start = BLOCK_ASSIGN_TWO, .len = 2},
-        },
+		[BLOCK_OUTER_MANY] = {
+			.kind = BLOCK_MANY,
+			.data.chain = {.cur = BLOCK_INNER_MANY, .next = BLOCK_OUTER_CHAIN_BAD},
+		},
+		[BLOCK_OUTER_CHAIN_BAD] = {
+			.kind = BLOCK_CHAIN,
+			.data.chain = {.cur = BLOCK_ASSIGN_BAD, .next = BLOCK_INVALID},
+		},
+		[BLOCK_INNER_MANY] = {
+			.kind = BLOCK_MANY,
+			.data.chain = {.cur = BLOCK_ASSIGN_TWO, .next = BLOCK_INNER_CHAIN_BREAK},
+		},
+		[BLOCK_INNER_CHAIN_BREAK] = {
+			.kind = BLOCK_CHAIN,
+			.data.chain = {.cur = BLOCK_BREAK_OUTER, .next = BLOCK_INVALID},
+		},
         [BLOCK_ASSIGN_TWO] = {
             .kind = BLOCK_BASIC,
             .data.basic = {.start = OP_TWO_PUSH_Y, .len = 3},

@@ -3,6 +3,14 @@
 This repository is an experiment in a small tree-shaped IR and VM. The main design goal is to make cleanup reliable: `defer` blocks should run even when execution leaves through a crash or a non-local break.
 
 ```
+Loop 
+	If (X and Y are Equal) Break
+	Else we will increment (X 1 Add )
+	Done
+Again
+```
+
+```
 Defer ( Write 5 Y ) in context {
 	all these lower case words are comments
 
@@ -113,7 +121,11 @@ Runs a contiguous list of operations. It may create temporary stack entries, but
 
 ### `BLOCK_MANY`
 
-Runs a sequence of sibling blocks in order. If one block becomes unreachable, later blocks in the sequence are skipped.
+Runs a sequence of sibling blocks in order. The first child is stored directly on the `BLOCK_MANY`; additional children are stored in `BLOCK_CHAIN` link nodes. The chain nodes are structural only and do not create extra scopes. If one child becomes unreachable, later children in the sequence are skipped.
+
+### `BLOCK_CHAIN`
+
+Links additional children into a block sequence. A chain node is not an executable block by itself; it is only valid when reached through a sequence owner such as `BLOCK_MANY`.
 
 ### `BLOCK_DEFER`
 

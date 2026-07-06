@@ -600,10 +600,20 @@ static CompileResult compile_many(Compiler* c,Block b){
 	if(!scope_push(c,frame)) return COMPILE_FAIL;
 
 	CompileResult r = COMPILE_REACHABLE;
-	for(count_t i=0;i<b.data.many.len;i++){
-		if(r == COMPILE_UNREACHABLE) break;
-		r = compile_block(c,b.data.many.start + i);
-		if(r == COMPILE_FAIL) return COMPILE_FAIL;
+	block_idx child = b.data.chain.cur;
+	block_idx chain = b.data.chain.next;
+	while(child != BLOCK_INVALID){
+		if(r != COMPILE_UNREACHABLE){
+			r = compile_block(c,child);
+			if(r == COMPILE_FAIL) return COMPILE_FAIL;
+		}
+
+		if(chain == BLOCK_INVALID) break;
+		if(chain >= c->func->blocks.len) return COMPILE_FAIL;
+		Block link = c->func->blocks.data[chain];
+		if(link.kind != BLOCK_CHAIN) return COMPILE_FAIL;
+		child = link.data.chain.cur;
+		chain = link.data.chain.next;
 	}
 
 	bool had_breaks = false;
@@ -824,6 +834,8 @@ static CompileResult compile_block(Compiler* c,block_idx idx){
 		return compile_basic(c,b);
 	case BLOCK_MANY:
 		return compile_many(c,b);
+	case BLOCK_CHAIN:
+		return COMPILE_FAIL;
 	case BLOCK_CRASH:
 		if(!emit_op(&c->code,B_CRASH)) return COMPILE_FAIL;
 		return COMPILE_UNREACHABLE;

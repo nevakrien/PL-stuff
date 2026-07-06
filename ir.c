@@ -13,6 +13,15 @@ void vm_func_s_free(VmFuncS* funcs){
 
 typedef STACK(count_t) EpiStack;
 
+static block_idx append_chain_node(BlocksBuilder* res,block_idx cur,block_idx next){
+	block_idx idx = res->len;
+	EXTEND_HEAP(*res,1);
+	res->data[idx].kind = BLOCK_CHAIN;
+	res->data[idx].data.chain.cur = cur;
+	res->data[idx].data.chain.next = next;
+	return idx;
+}
+
 typedef enum TypeLayoutState : char {
 	TYPE_LAYOUT_PENDING,
 	TYPE_LAYOUT_ACTIVE,
@@ -133,17 +142,22 @@ static void _remove_defers(count_t src,count_t dst,const BlockS* blocks,BlocksBu
 
 	PUSH_HEAP(*epis,0);//poped later
 
-	switch(b.kind){
-	case BLOCK_BASIC: break;		
+		switch(b.kind){
+		case BLOCK_BASIC: break;		
 	    case BLOCK_DEFER: {
 	    	count_t dst_pad = res->len;
-	    	count_t dst_defer = res->len+1;
-	    	count_t dst_next = res->len+2;
-	    	EXTEND_HEAP(*res,3);
+	    	count_t dst_chain = res->len+1;
+	    	count_t dst_defer = res->len+2;
+	    	count_t dst_next = res->len+3;
+	    	EXTEND_HEAP(*res,4);
 
 	    	res->data[dst].kind = BLOCK_MANY;
-	    	res->data[dst].data.many.start = dst_pad;
-	    	res->data[dst].data.many.len = 2;
+	    	res->data[dst].data.chain.cur = dst_pad;
+	    	res->data[dst].data.chain.next = dst_chain;
+
+		res->data[dst_chain].kind = BLOCK_CHAIN;
+		res->data[dst_chain].data.chain.cur = dst_defer;
+		res->data[dst_chain].data.chain.next = BLOCK_INVALID;
 
 	    	res->data[dst_pad].kind = BLOCK_CRASH_PAD;
 	    	res->data[dst_pad].data.crash_pad.body = dst_next;
@@ -173,19 +187,42 @@ static void _remove_defers(count_t src,count_t dst,const BlockS* blocks,BlocksBu
 	}
 
 	case BLOCK_MANY:{
-		count_t len = b.data.many.len;
-		count_t start = b.data.many.start;
-		count_t dst_start = res->len;
+		res->data[dst].data.chain.cur = BLOCK_INVALID;
+		res->data[dst].data.chain.next = BLOCK_INVALID;
 
-		res->data[dst].data.many.start = dst_start;
-		res->data[dst].data.many.len = len;
+		block_idx prev_link = BLOCK_INVALID;
+		block_idx src_child = b.data.chain.cur;
+		block_idx src_chain = b.data.chain.next;
 
-		EXTEND_HEAP(*res,len);
-		for(count_t i = 0; i<len;i++){
-			_remove_defers(start+i,dst_start+i,blocks,res,epis);
+		while(src_child != BLOCK_INVALID){
+			block_idx dst_child = res->len;
+			EXTEND_HEAP(*res,1);
+
+			block_idx dst_link = BLOCK_INVALID;
+			if(res->data[dst].data.chain.cur != BLOCK_INVALID){
+				dst_link = append_chain_node(res,dst_child,BLOCK_INVALID);
+				if(res->data[dst].data.chain.next == BLOCK_INVALID){
+					res->data[dst].data.chain.next = dst_link;
+				}else{
+					res->data[prev_link].data.chain.next = dst_link;
+				}
+				prev_link = dst_link;
+			}else{
+				res->data[dst].data.chain.cur = dst_child;
+			}
+
+			_remove_defers(src_child,dst_child,blocks,res,epis);
+
+			if(src_chain == BLOCK_INVALID) break;
+			if(src_chain >= blocks->len) break;
+			Block link = blocks->data[src_chain];
+			if(link.kind != BLOCK_CHAIN) break;
+			src_child = link.data.chain.cur;
+			src_chain = link.data.chain.next;
 		}
 		break;
 	}
+	case BLOCK_CHAIN: break;
 		
 
 	case BLOCK_CRASH: break;
@@ -211,40 +248,59 @@ static void _remove_defers(count_t src,count_t dst,const BlockS* blocks,BlocksBu
     }
 
     case BLOCK_BREAK: {
-    	EpiStack stack = *epis;
-    	EpiStack actual = {0};
+	    	EpiStack stack = *epis;
+		block_idx prev_link = BLOCK_INVALID;
+
+	    	res->data[dst].kind = BLOCK_MANY;
+		res->data[dst].data.chain.cur = BLOCK_INVALID;
+		res->data[dst].data.chain.next = BLOCK_INVALID;
 
 	    	for(count_t i=0;i<b.data.level;i++){
-    		assert(stack.len);
+	    		assert(stack.len);
 
-    		count_t d = TOP(stack);
-    		stack.len--;
+	    		count_t d = TOP(stack);
+	    		stack.len--;
 
-    		if(d) PUSH_HEAP(actual,d);
-    	}
+	    		if(!d) continue;
 
-    	if(!actual.len) break;
+			block_idx dst_child = res->len;
+			EXTEND_HEAP(*res,1);
+			res->data[dst_child] = res->data[d];
 
-    	//we move to many{..defers.. break}
-    	//this is legal since defers may not break out of the many blocks
-    		
-    	res->data[dst].kind = BLOCK_MANY;
-    	count_t len = actual.len+1;
-    	count_t start = res->len;
-		res->data[dst].data.many.start = start;
-		res->data[dst].data.many.len = len;
-		EXTEND_HEAP(*res,len);
+			if(res->data[dst].data.chain.cur == BLOCK_INVALID){
+				res->data[dst].data.chain.cur = dst_child;
+			}else{
+				block_idx link = append_chain_node(res,dst_child,BLOCK_INVALID);
+				if(res->data[dst].data.chain.next == BLOCK_INVALID){
+					res->data[dst].data.chain.next = link;
+				}else{
+					res->data[prev_link].data.chain.next = link;
+				}
+				prev_link = link;
+			}
+	    	}
 
-		for(count_t i = 0; i<len-1;i++){
-			res->data[start+i] = res->data[actual.data[i]];
+	    	if(res->data[dst].data.chain.cur == BLOCK_INVALID){
+			res->data[dst].kind = BLOCK_BREAK;
+			res->data[dst].data.level = b.data.level;
+			break;
 		}
 
-		res->data[start+len-1].kind = BLOCK_BREAK;
-		res->data[start+len-1].data.level = b.data.level+1;
+	    	//we move to many{..defers.. break}
+	    	//this is legal since defers may not break out of the many blocks
+		block_idx break_child = res->len;
+		EXTEND_HEAP(*res,1);
+		res->data[break_child].kind = BLOCK_BREAK;
+		res->data[break_child].data.level = b.data.level+1;
 
-		free(actual.data);
+		block_idx link = append_chain_node(res,break_child,BLOCK_INVALID);
+		if(res->data[dst].data.chain.next == BLOCK_INVALID){
+			res->data[dst].data.chain.next = link;
+		}else{
+			res->data[prev_link].data.chain.next = link;
+		}
 		break;
-    }
+	    }
     case BLOCK_VAR: {
     	count_t body = res->len;
     	EXTEND_HEAP(*res,1);

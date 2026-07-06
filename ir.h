@@ -43,6 +43,7 @@ typedef uoffset_t func_idx;
 static const type_idx TYPE_INT_ID = 0;
 static const type_idx TYPE_BYTE_ID = 1;
 static const type_idx TYPE_INVALID_ID = (type_idx)-1;
+static const block_idx BLOCK_INVALID = (block_idx)-1;
 
 typedef union Cell {
 	void* ptr;
@@ -190,10 +191,11 @@ typedef struct OP {
 
 typedef enum BLOCK_KIND : count_t {
     BLOCK_BASIC,
-    BLOCK_DEFER,
-    BLOCK_MANY,
+	BLOCK_DEFER,
+	BLOCK_MANY,
+	BLOCK_CHAIN,
 
-    BLOCK_CRASH,
+	BLOCK_CRASH,
     BLOCK_HARD_CRASH,
     BLOCK_CRASH_PAD,
     
@@ -220,10 +222,10 @@ typedef struct OpRange {
 //it can be loaded directly from disk
 typedef struct Block {    
 	BLOCK_KIND kind;
-    union {
-        OpRange basic;
-        struct {block_idx start; count_t len;} many;
-        struct {block_idx next; block_idx defer;} defer;//same as crash_pad
+	union {
+		OpRange basic;
+		struct {block_idx cur; block_idx next;} chain;
+		struct {block_idx next; block_idx defer;} defer;//same as crash_pad
         struct {block_idx body; block_idx pad;} crash_pad;
         struct {OpRange cond; block_idx yes; block_idx no;} branch;
         struct {block_idx body;} loop;

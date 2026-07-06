@@ -527,12 +527,24 @@ static int scan_block(CompileContext* ctx,ScanState* state,func_idx current,bloc
 	switch(b.kind){
 	case BLOCK_BASIC:
 		return scan_basic(ctx,state,current,idx,b,handler,user);
-	case BLOCK_MANY:
-		for(count_t i = 0;i < b.data.many.len;i++){
-			int r = scan_block(ctx,state,current,b.data.many.start + i,handler,user);
+	case BLOCK_MANY: {
+		block_idx child = b.data.chain.cur;
+		block_idx chain = b.data.chain.next;
+		while(child != BLOCK_INVALID){
+			int r = scan_block(ctx,state,current,child,handler,user);
 			if(r) return r;
+
+			if(chain == BLOCK_INVALID) break;
+			if(chain >= func->blocks.len) return 1;
+			Block link = func->blocks.data[chain];
+			if(link.kind != BLOCK_CHAIN) return 1;
+			child = link.data.chain.cur;
+			chain = link.data.chain.next;
 		}
 		return 0;
+	}
+	case BLOCK_CHAIN:
+		return 1;
 	case BLOCK_DEFER:
 		if(scan_block(ctx,state,current,b.data.defer.next,handler,user)) return 1;
 		ctx->pars.len = before;
