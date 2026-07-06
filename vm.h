@@ -16,6 +16,7 @@ typedef struct VM {
 	STACK(char) storage; //aligned to CELL_ALIGN
 	STACK(void*) param_stack;
 	STACK(CrashFrame) crash_stack;
+	void* user;
 } VM;
 
 typedef enum VM_RESULT {

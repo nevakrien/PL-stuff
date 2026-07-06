@@ -10,45 +10,57 @@ Loop
 Again
 ```
 
+calling functions is done in a basic block which is (). By the end of such blocks the stack is cleaned up.
+
 ```
-Defer ( Write 5 Y ) in context {
-	all these lower case words are comments
+Var Slice X
 
-	hey here is a variable 
-	Var Y this is the scope {
-		Write 2 Y
-	}
-
-	we are out of scope our y is the old value
+(X 10 Malloc)
+Defer (X Free)
+Start
+	(X Y Z DoSomething)
 	Crash
-}
+End
 
-this will never happen since we crash 
-but y would be 5 since we defered
+or equivelently
+
+(X 10 Malloc)
+Start 
+	(X Y Z DoSomething)
+	Crash
+Finally 
+	(X Free) this will always run
+End
+
+Release X now we pop the var off the stack
+this can be omited
+
+
+```
+
+```
+Func Add2 (Int Y) <- (Int X)
+
+(Y X Assign 2 Add)
+
+Ret
 ```
 
 ```
-While Y (Print "hello" the string is a global variable thats constnat)
+Macro DoTwice has an implicit vm parameter
+	Var Name
+	(Name ParseName expands to vm parse_name_vm)
+	(Name Name Emit Emit expands to vm emit_vm )
+Ret
 
-(Y; X; Write; X; ) using ; makes the compiler see it as end of stamtent
-so we pushed y then x then called write on a full stack
-note that the additional x left on the stack gets discarded by the compiler when we exit the () basic block
-
-If (Not Y) (X; DoThing)
-since there is no else we are done
-
-Write X Y y will now be assigned x
+Func Square (Int Y) <- (Int X)
+	(Y X Assign )
+	( DoTwice Y Mul )
+Ret
 ```
 
-```
-functions are relativly striaght forward.
-the only thing which is somewhat weird is the stack based notation
 
-Func (Int X, Int Z) -> (Int Y) we are done with the sig
-  Write X into Y
 
-when calling this function x is on the top of the stack and y is at the bottom
-```
 
 ## IR Model
 

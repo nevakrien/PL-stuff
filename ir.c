@@ -187,6 +187,11 @@ static void _remove_defers(count_t src,count_t dst,const BlockS* blocks,BlocksBu
 	}
 
 	case BLOCK_MANY:{
+		// BLOCK_MANY and BLOCK_CHAIN share the same pair-shaped payload:
+		// cur is the child to run, next is the next chain link. When copying a
+		// many block into res, each child may expand while defers are removed, so
+		// we allocate a fresh child slot and rebuild the chain links around those
+		// new child ids instead of preserving the old links.
 		res->data[dst].data.chain.cur = BLOCK_INVALID;
 		res->data[dst].data.chain.next = BLOCK_INVALID;
 
