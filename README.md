@@ -13,7 +13,7 @@ Again
 calling functions is done in a basic block which is (). By the end of such blocks the stack is cleaned up.
 
 ```
-Var Slice X
+Var Slice Int X
 
 (X 10 Malloc)
 Defer (X Free)
@@ -113,6 +113,7 @@ Array operations work on fixed-capacity stack arrays:
 Slice and view operations work on reference values laid out as `[ptr][len]`:
 
 - `OP_SLICE_FROM_AR` expects a slice/view destination pointer and an array pointer. It writes a reference to the array data and current array length into the destination.
+- `OP_SLICE_FROM_ONE` expects a mutable slice destination pointer and an element pointer. It uses that pointer directly as the slice data and sets the length to one.
 - `OP_SLICE_AT` expects a slice/view pointer and an `int` index pointer. It replaces those two entries with a pointer to the selected element and crashes at runtime if the index is out of bounds.
 - `OP_SLICE_INC` expects a mutable slice pointer and an `int` count pointer. It advances the slice data pointer by that many elements and crashes if the count is negative or greater than the slice length.
 - `OP_SLICE_DEC` expects a mutable slice pointer and an `int` count pointer. It reduces the slice length by that many elements and crashes if the count is negative or greater than the slice length.

@@ -1215,6 +1215,65 @@ static void test_slice_from_array_at_inc_and_dec(void) {
     vm_free_for_test(&vm);
 }
 
+static void test_slice_from_one_uses_element_pointer(void) {
+    enum {
+        ARG_SLICE,
+        ARG_X,
+        ARG_COUNT,
+    };
+
+    static SigInput ins[] = {
+        {.var = {.tid = TYPE_INT_ID, .name = "x"}},
+    };
+    static Var outs[] = {
+        {.tid = TYPE_INT_SLICE_ID, .name = "slice"},
+    };
+    static Var vars[] = {
+        [ARG_SLICE] = {.tid = TYPE_INT_SLICE_ID, .name = "slice"},
+        [ARG_X] = {.tid = TYPE_INT_ID, .name = "x"},
+    };
+    static OP ops[] = {
+        {.kind = OP_PUSH_ARG, .extra = ARG_SLICE},
+        {.kind = OP_PUSH_ARG, .extra = ARG_X},
+        {.kind = OP_SLICE_FROM_ONE},
+    };
+    static Block blocks[] = {
+        {.kind = BLOCK_BASIC, .data.basic = {.start = 0, .len = 3}},
+    };
+    Func func = {
+        .name = "test_slice_from_one_uses_element_pointer",
+        .sig = {
+            .ins = {.data = ins, .len = 1},
+            .outs = {.data = outs, .len = 1},
+        },
+        .types = test_type_slice(),
+        .blocks = {.data = blocks, .len = 1},
+        .ops = {.data = ops, .len = 3},
+        .vars = {.data = vars, .len = ARG_COUNT},
+    };
+
+    assert(type_layout_all(test_type_slice()));
+    alignas(Cell) unsigned char slice[type_slice_payload_size()];
+    memset(slice, 0, sizeof(slice));
+    num_t x = 42;
+    VM vm;
+    vm_init_for_test(&vm, 1024, 8, 8);
+    push_param_or_die(&vm, slice);
+    push_param_or_die(&vm, &x);
+
+    run_func_or_die(&func, &vm);
+
+    void* data;
+    count_t len;
+    memcpy(&data, slice, sizeof(data));
+    memcpy(&len, slice + type_slice_len_offset(), sizeof(len));
+    assert(data == &x);
+    assert(len == 1);
+    assert(vm.param_stack.len == 1);
+
+    vm_free_for_test(&vm);
+}
+
 static void test_struct_at_assigns_field(void) {
     enum {
         ARG_Y,
@@ -2367,6 +2426,9 @@ int main(void) {
 
     test_slice_from_array_at_inc_and_dec();
     puts("ok: test_slice_from_array_at_inc_and_dec");
+
+    test_slice_from_one_uses_element_pointer();
+    puts("ok: test_slice_from_one_uses_element_pointer");
 
     test_struct_at_assigns_field();
     puts("ok: test_struct_at_assigns_field");

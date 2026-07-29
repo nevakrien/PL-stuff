@@ -28,6 +28,7 @@ bool frontend_prepare_func(Frontend* fe){
 	return true;
 }
 
+//we want to be flexible over whether or not we assume a heap
 static bool frontend_add_word(Frontend* fe,FrontendWord word){
 	if(fe->words.len >= fe->words.cap){
 		size_t cap = fe->words.cap ? fe->words.cap * 2 : 16;

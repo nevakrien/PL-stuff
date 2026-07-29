@@ -181,6 +181,7 @@ typedef enum OP_KIND : char {
     OP_SLICE_DEC,          // ( slice n -- slice ) slice.len -= n, data unchanged
 
     OP_STRUCT_AT,          // ( struct -- field ) extra=field idx
+    OP_SLICE_FROM_ONE,     // ( slice elem -- slice ) slice points directly at elem with len 1
 } OP_KIND;
 
 typedef struct OP {
@@ -272,6 +273,7 @@ typedef enum ByteCode : char {
 	B_SLICE_INC,
 	B_SLICE_DEC,
 	B_PUSH_STRUCT_AT,
+	B_SLICE_FROM_ONE,
 
 	//numeric buildins
 } ByteCode;

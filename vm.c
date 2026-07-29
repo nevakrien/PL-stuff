@@ -501,6 +501,17 @@ static bool compile_op(Compiler* c,OP op){
 		return pop_types(&c->params,1);
 	}
 
+	case OP_SLICE_FROM_ONE: {
+		if(c->params.len < 2) return false;
+		type_idx ref_tid = c->params.data[c->params.len - 2];
+		type_idx elem_tid = c->params.data[c->params.len - 1];
+		if(!type_idx_valid(types,ref_tid) || types.data[ref_tid].kind != TYPE_SLICE) return false;
+		if(types.data[ref_tid].data.ref.elem != elem_tid) return false;
+		if(!emit_op(&c->code,B_SLICE_FROM_ONE)) return false;
+		if(!emit_size(&c->code,type_slice_len_offset())) return false;
+		return pop_types(&c->params,1);
+	}
+
 	case OP_SLICE_AT: {
 		if(c->params.len < 2) return false;
 		type_idx ref_tid = c->params.data[c->params.len - 2];
@@ -1179,6 +1190,21 @@ VM_RESULT vm_run(VM* vm,const ByteCode* code){
 			memcpy(&len,arr,sizeof(len));
 
 			char* slice = TOP(vm->param_stack);
+			memcpy(slice,&data,sizeof(data));
+			memcpy(slice + len_offset,&len,sizeof(len));
+			break;
+		}
+
+		case B_SLICE_FROM_ONE: {
+			size_t len_offset;
+			pc = read_size(pc,&len_offset);
+			if(vm->param_stack.len < 2) return VM_PARAM_UNDERFLOW;
+
+			void* data = TOP(vm->param_stack);
+			vm->param_stack.len--;
+
+			char* slice = TOP(vm->param_stack);
+			count_t len = 1;
 			memcpy(slice,&data,sizeof(data));
 			memcpy(slice + len_offset,&len,sizeof(len));
 			break;

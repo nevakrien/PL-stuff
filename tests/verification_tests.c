@@ -134,6 +134,44 @@ static void test_local_slice_retarget_allowed(void){
 	expect_borrow_check(&ctx,0);
 }
 
+static void test_slice_from_one_allowed(void){
+	TypeS types = fresh_types();
+	Var vars[] = {
+		{.name = "s", .tid = TYPE_INT_SLICE_ID},
+		{.name = "x", .tid = TYPE_INT_ID},
+	};
+	OP ops[] = {
+		{.kind = OP_PUSH_VAR,.extra = 0},
+		{.kind = OP_PUSH_VAR,.extra = 1},
+		{.kind = OP_SLICE_FROM_ONE},
+	};
+	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
+	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 3},.vars = {.data = vars,.len = 2}}};
+	CompileContext ctx = make_ctx(funcs,1);
+	expect_borrow_check(&ctx,0);
+}
+
+static void test_slice_from_one_backing_scope_reported(void){
+	TypeS types = fresh_types();
+	Var vars[] = {
+		{.name = "s", .tid = TYPE_INT_SLICE_ID},
+		{.name = "x", .tid = TYPE_INT_ID},
+	};
+	OP ops[] = {
+		{.kind = OP_PUSH_VAR,.extra = 0},
+		{.kind = OP_PUSH_VAR,.extra = 1},
+		{.kind = OP_SLICE_FROM_ONE},
+	};
+	Block blocks[] = {
+		{.kind = BLOCK_VAR,.data.var = {.var = 0,.body = 1}},
+		{.kind = BLOCK_VAR,.data.var = {.var = 1,.body = 2}},
+		one_basic(sizeof(ops) / sizeof(ops[0])),
+	};
+	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 3},.ops = {.data = ops,.len = 3},.vars = {.data = vars,.len = 2}}};
+	CompileContext ctx = make_ctx(funcs,1);
+	expect_first_pass_error(&ctx,TYPE_CHECK_ERROR_PORTAL_BACKING_SCOPE);
+}
+
 static void test_local_portal_assign_allowed(void){
 	TypeS types = fresh_types();
 	Var vars[] = {
@@ -394,6 +432,23 @@ static void test_slice_from_wrong_array_type_rejected_in_first_pass(void){
 	expect_first_pass_error(&ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH);
 }
 
+static void test_slice_from_one_wrong_element_rejected_in_first_pass(void){
+	TypeS types = fresh_types();
+	Var vars[] = {
+		{.name = "s", .tid = TYPE_INT_SLICE_ID},
+		{.name = "x", .tid = TYPE_BYTE_ID},
+	};
+	OP ops[] = {
+		{.kind = OP_PUSH_VAR,.extra = 0},
+		{.kind = OP_PUSH_VAR,.extra = 1},
+		{.kind = OP_SLICE_FROM_ONE},
+	};
+	Block blocks[] = {one_basic(sizeof(ops) / sizeof(ops[0]))};
+	Func funcs[] = {{.name = "caller",.types = types,.blocks = {.data = blocks,.len = 1},.ops = {.data = ops,.len = 3},.vars = {.data = vars,.len = 2}}};
+	CompileContext ctx = make_ctx(funcs,1);
+	expect_first_pass_error(&ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH);
+}
+
 static void test_stack_underflow_rejected_in_first_pass(void){
 	TypeS types = fresh_types();
 	OP ops[] = {{.kind = OP_ASSIGN}};
@@ -449,6 +504,10 @@ int main(void){
 	puts("ok: test_recursive_portal_types");
 	test_local_slice_retarget_allowed();
 	puts("ok: test_local_slice_retarget_allowed");
+	test_slice_from_one_allowed();
+	puts("ok: test_slice_from_one_allowed");
+	test_slice_from_one_backing_scope_reported();
+	puts("ok: test_slice_from_one_backing_scope_reported");
 	test_local_portal_assign_allowed();
 	puts("ok: test_local_portal_assign_allowed");
 	test_non_local_slice_retarget_reported();
@@ -477,6 +536,8 @@ int main(void){
 	puts("ok: test_native_call_type_mismatch_rejected_in_first_pass");
 	test_slice_from_wrong_array_type_rejected_in_first_pass();
 	puts("ok: test_slice_from_wrong_array_type_rejected_in_first_pass");
+	test_slice_from_one_wrong_element_rejected_in_first_pass();
+	puts("ok: test_slice_from_one_wrong_element_rejected_in_first_pass");
 	test_stack_underflow_rejected_in_first_pass();
 	puts("ok: test_stack_underflow_rejected_in_first_pass");
 	test_branch_condition_must_leave_int();

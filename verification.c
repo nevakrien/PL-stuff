@@ -329,6 +329,16 @@ static int type_check_op(TypeCheckCtx* t,CompileContext* ctx,const Func* func,OP
 		if(func->types.data[ref_tid].kind != TYPE_SLICE && func->types.data[ref_tid].kind != TYPE_VIEW) return report_type_error(t,ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH,op,loc,ctx->pars.data[ctx->pars.len - 2],TYPE_INVALID_ID,ref_tid);
 		return type_is_array_of(func->types,arr_tid,func->types.data[ref_tid].data.ref.elem) ? 0 : report_type_error(t,ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH,op,loc,ctx->pars.data[ctx->pars.len - 1],func->types.data[ref_tid].data.ref.elem,arr_tid);
 	}
+	case OP_SLICE_FROM_ONE: {
+		if(ctx->pars.len < 2) return report_stack_underflow(t,ctx,op,loc,2,(count_t)ctx->pars.len);
+		par_idx ref = ctx->pars.data[ctx->pars.len - 2];
+		par_idx elem = ctx->pars.data[ctx->pars.len - 1];
+		type_idx ref_tid = par_type(ctx,func,ref);
+		type_idx elem_tid = par_type(ctx,func,elem);
+		if(!type_idx_valid(func->types,ref_tid)) return report_type_error(t,ctx,TYPE_CHECK_ERROR_INVALID_TYPE,op,loc,ref,ref_tid,ref_tid);
+		if(func->types.data[ref_tid].kind != TYPE_SLICE) return report_type_error(t,ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH,op,loc,ref,TYPE_INVALID_ID,ref_tid);
+		return func->types.data[ref_tid].data.ref.elem == elem_tid ? 0 : report_type_error(t,ctx,TYPE_CHECK_ERROR_TYPE_MISMATCH,op,loc,elem,func->types.data[ref_tid].data.ref.elem,elem_tid);
+	}
 	case OP_SLICE_INC:
 	case OP_SLICE_DEC:
 		if(ctx->pars.len < 2) return report_stack_underflow(t,ctx,op,loc,2,(count_t)ctx->pars.len);
@@ -458,6 +468,7 @@ static int scan_ops(CompileContext* ctx,ScanState* state,func_idx current,block_
 		case OP_ARR_PUSH:
 		case OP_ARR_DROP:
 		case OP_SLICE_FROM_AR:
+		case OP_SLICE_FROM_ONE:
 			if(ctx->pars.len < 2) return 1;
 			if(!pars_pop(ctx,1)) return 1;
 			break;
@@ -665,6 +676,17 @@ static int type_check_first_pass_op(
 		*/
 		bool shared_only = ref_type.kind == TYPE_VIEW;
 		return handle_add_hold(ctx, ref, arr, loc, shared_only) ? 0 : 1;
+	}
+
+	if(op.kind == OP_SLICE_FROM_ONE){
+		if(ctx->pars.len < 2) return 1;
+
+		par_idx ref = ctx->pars.data[ctx->pars.len - 2];
+		par_idx elem = ctx->pars.data[ctx->pars.len - 1];
+		int r = check_portal_region(p,ctx,func,state,ref,elem,loc,op);
+		if(r) return r;
+
+		return handle_add_hold(ctx,ref,elem,loc,false) ? 0 : 1;
 	}
 
 	if(op.kind == OP_ASSIGN){
