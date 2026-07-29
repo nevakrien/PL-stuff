@@ -11,12 +11,24 @@ typedef struct CrashFrame {
 	size_t param_base;
 } CrashFrame;
 
+typedef struct VmParsedName {
+	const char* data;
+	size_t len;
+} VmParsedName;
+
+typedef struct VmParser {
+	void* user;
+	bool (*parse_name)(void* user,VmParsedName* name);
+	bool (*parse_number)(void* user,num_t* number);
+	bool (*parse_type)(void* user,type_idx* tid);
+} VmParser;
 
 typedef struct VM {
 	STACK(char) storage; //aligned to CELL_ALIGN
 	STACK(void*) param_stack;
 	STACK(CrashFrame) crash_stack;
 	void* user;
+	VmParser parser;
 } VM;
 
 typedef enum VM_RESULT {
@@ -47,6 +59,18 @@ typedef VM_RESULT (*VmNativeFunc)(VM*);
 VmCode vm_compile_no_defers(const Func* func,CompileContext* ctx);//note func may not be from funcs.
 VM_RESULT vm_run(VM* vm,const ByteCode* code);
 void vm_free(VM* vm);
+
+static inline bool vm_parse_name(VM* vm,VmParsedName* name){
+	return vm && vm->parser.parse_name && vm->parser.parse_name(vm->parser.user,name);
+}
+
+static inline bool vm_parse_number(VM* vm,num_t* number){
+	return vm && vm->parser.parse_number && vm->parser.parse_number(vm->parser.user,number);
+}
+
+static inline bool vm_parse_type(VM* vm,type_idx* tid){
+	return vm && vm->parser.parse_type && vm->parser.parse_type(vm->parser.user,tid);
+}
 
 static inline VM_RESULT vm_push_param(VM* vm, void* param){
 	if(vm->param_stack.len>=vm->param_stack.cap) return VM_OOM_PARAM;

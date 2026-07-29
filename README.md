@@ -2,6 +2,39 @@
 
 This repository is an experiment in a small tree-shaped IR and VM. The main design goal is to make cleanup reliable: `defer` blocks should run even when execution leaves through a crash or a non-local break.
 
+Build and start the REPL with:
+
+```sh
+make pl_repl
+./pl_repl
+```
+
+REPL forms are currently `void -> void`. A named form is saved without running; an unnamed form runs when `Ret` completes it:
+
+```
+pl> Func Empty
+...> Ret
+defined Empty [0]
+pl> Empty
+...> Ret
+ran
+```
+
+Functions become words as soon as their definition succeeds and can be called by later definitions. Forms can be entered on one line, and integer literals can be printed with `Print`:
+
+```text
+pl> 2 Print Ret
+2
+ran
+pl> Func PrintTwo (2 Print) Ret
+defined PrintTwo [0]
+pl> PrintTwo Ret
+2
+ran
+```
+
+Function, variable, and user-defined type names are unrestricted UTF-8 tokens. ASCII whitespace and standard Unicode whitespace separate tokens; parentheses remain syntax delimiters.
+
 ```
 Loop 
 	If (X and Y are Equal) Break
@@ -58,6 +91,21 @@ Func Square (Int Y) <- (Int X)
 	( DoTwice Y Mul )
 Ret
 ```
+
+### Frontend Declarations
+
+`Var` is an immediate frontend word. It consumes a recursive prefix type and a name, then makes the local visible for the remainder of the current function:
+
+```
+Var Int Count
+Var Slice Byte Buffer
+Var View Int Numbers
+Var Array 16 Byte Scratch
+```
+
+The type mini-language recognizes `Int`, `Byte`, `Slice <type>`, `View <type>`, `Array <capacity> <type>`, and exact names already present in the function's type table. Composite types are interned in that table.
+
+Immediate function words are registered with a `func_idx`, not a `Func*`, and resolve through `CompileContext.funcs` when invoked. The active parser is also available to native code running on the macro VM through `vm_parse_name`, `vm_parse_number`, and `vm_parse_type`. These use typed C output parameters outside the VM data stack; parser results must not be presented as ordinary IR values until the IR has real `Name` and `Type` types.
 
 
 

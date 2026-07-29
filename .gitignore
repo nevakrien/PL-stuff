@@ -37,6 +37,7 @@
 *.hex
 tests/verification_tests
 tests/vm_ir_tests
+/pl_repl
 
 # Debug files
 *.dSYM/
