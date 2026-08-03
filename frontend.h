@@ -16,6 +16,7 @@ typedef enum FrontendError {
 	FRONTEND_MACRO_RUNTIME_FAILED,
 	FRONTEND_INTERPRETER_COMPILE_FAILED,
 	FRONTEND_INTERPRETER_RUNTIME_FAILED,
+	FRONTEND_BAD_CONTROL_FLOW,
 } FrontendError;
 
 typedef enum FrontendWordKind {
@@ -28,6 +29,17 @@ typedef enum FrontendWordKind {
 typedef enum FrontendImmediateKind {
 	FRONTEND_IMMEDIATE_FUNC,
 	FRONTEND_IMMEDIATE_VAR,
+	FRONTEND_IMMEDIATE_LOOP,
+	FRONTEND_IMMEDIATE_AGAIN,
+	FRONTEND_IMMEDIATE_IF,
+	FRONTEND_IMMEDIATE_ELSE,
+	FRONTEND_IMMEDIATE_DONE,
+	FRONTEND_IMMEDIATE_BREAK,
+	FRONTEND_IMMEDIATE_CONTINUE,
+	FRONTEND_IMMEDIATE_START,
+	FRONTEND_IMMEDIATE_FINALLY,
+	FRONTEND_IMMEDIATE_END,
+	FRONTEND_IMMEDIATE_DEFER,
 } FrontendImmediateKind;
 
 typedef struct FrontendImmediate {
@@ -53,6 +65,35 @@ typedef struct FrontendWord {
 	} data;
 } FrontendWord;
 
+typedef enum FrontendScopeKind {
+	FRONTEND_SCOPE_LOOP,
+	FRONTEND_SCOPE_IF,
+	FRONTEND_SCOPE_EPILOGUE,
+} FrontendScopeKind;
+
+typedef enum FrontendScopePhase {
+	FRONTEND_SCOPE_BODY,
+	FRONTEND_SCOPE_WAIT_OPEN,
+	FRONTEND_SCOPE_CONDITION,
+	FRONTEND_SCOPE_ELSE_BODY,
+	FRONTEND_SCOPE_CLEANUP,
+	FRONTEND_SCOPE_CLEANUP_WAIT_OPEN,
+} FrontendScopePhase;
+
+typedef struct FrontendScope {
+	FrontendScopeKind kind;
+	FrontendScopePhase phase;
+	block_idx block;
+	block_idx first;
+	block_idx second;
+	block_idx after;
+	count_t parent_depth;
+	count_t break_depth;
+	count_t continue_depth;
+	count_t delimiter_depth;
+	bool implicit_end;
+} FrontendScope;
+
 typedef struct Frontend {
 	CompileContext* ctx;
 	Func* func;
@@ -63,11 +104,13 @@ typedef struct Frontend {
 	FrontendName current_token;
 	STACK(char*) owned_names;
 	STACK(uoffset_t) owned_globals;
+	STACK(FrontendScope) scopes;
 	size_t op_cap;
 	size_t block_cap;
 	size_t var_cap;
 	size_t type_cap;
 	block_idx current_basic;
+	count_t scope_depth;
 	FrontendError error;
 	const char* error_word;
 	VM_RESULT macro_result;

@@ -88,6 +88,7 @@ static const char* frontend_error_name(FrontendError error){
 	case FRONTEND_MACRO_RUNTIME_FAILED: return "immediate execution failed";
 	case FRONTEND_INTERPRETER_COMPILE_FAILED: return "interpreter compilation failed";
 	case FRONTEND_INTERPRETER_RUNTIME_FAILED: return "interpreter execution failed";
+	case FRONTEND_BAD_CONTROL_FLOW: return "invalid or incomplete control flow";
 	}
 	return "frontend error";
 }
@@ -118,6 +119,15 @@ static void free_built_func(Frontend* fe,Func* func){
 	frontend_free(fe);
 }
 
+static void lower_func_defers(Func* func){
+	for(size_t i=0;i<func->blocks.len;i++){
+		if(func->blocks.data[i].kind == BLOCK_DEFER){
+			remove_defers(&func->blocks);
+			return;
+		}
+	}
+}
+
 static bool build_frontend(Repl* repl,Frontend* fe,Func* func,size_t word_count){
 	frontend_init(fe,&repl->ctx,func);
 	return frontend_add_core_words(fe)
@@ -135,6 +145,7 @@ static bool run_anonymous(Repl* repl){
 		return false;
 	}
 
+	lower_func_defers(&func);
 	VmCode code = vm_compile_no_defers(&func,&repl->ctx);
 	if(!code.data){
 		fprintf(stderr,"error: generated IR did not compile\n");
@@ -183,6 +194,7 @@ static bool define_named(Repl* repl){
 		return false;
 	}
 
+	lower_func_defers(func);
 	VmCode code = vm_compile_no_defers(func,&repl->ctx);
 	if(!code.data){
 		fprintf(stderr,"error: generated IR for '%s' did not compile\n",repl->pending_name);

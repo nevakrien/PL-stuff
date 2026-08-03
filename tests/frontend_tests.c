@@ -259,6 +259,201 @@ static void test_ir_interpreter_handles_empty_source_and_recovers(void){
 	free(func.ops.data);
 }
 
+static void test_if_selects_an_arm(void){
+	static Var vars[] = {
+		{.tid = TYPE_INT_ID,.name = "Y"},
+		{.tid = TYPE_INT_ID,.name = "Condition"},
+		{.tid = TYPE_INT_ID,.name = "Alternative"},
+	};
+	static Var outs[] = {{.tid = TYPE_INT_ID,.name = "Y"}};
+	static SigInput ins[] = {
+		{.var = {.tid = TYPE_INT_ID,.name = "Condition"}},
+		{.var = {.tid = TYPE_INT_ID,.name = "Alternative"}},
+	};
+	Func func = {
+		.name = "frontend_if",
+		.sig = {.outs = {.data = outs,.len = 1},.ins = {.data = ins,.len = 2}},
+		.types = test_type_slice(),
+		.vars = {.data = vars,.len = 3},
+	};
+	Frontend fe;
+	frontend_init(&fe,NULL,&func);
+	assert(frontend_add_core_words(&fe));
+	assert(frontend_compile_source(&fe,
+		"If (Condition) (Y Condition Assign) Else (Y Alternative Assign) Done"));
+
+	VmCode code = vm_compile_no_defers(&func,NULL);
+	assert(code.data);
+	VM vm;
+	vm_init_for_test(&vm);
+	num_t y = 0;
+	num_t condition = 0;
+	num_t alternative = 27;
+	assert(vm_push_param(&vm,&y) == VM_OK);
+	assert(vm_push_param(&vm,&condition) == VM_OK);
+	assert(vm_push_param(&vm,&alternative) == VM_OK);
+	assert(vm_run(&vm,code.data) == VM_OK);
+	assert(y == 27);
+
+	vm_code_free(&code);
+	vm_free(&vm);
+	frontend_free(&fe);
+	free(func.blocks.data);
+	free(func.ops.data);
+}
+
+static void test_loop_break_and_continue_targets(void){
+	static Var vars[] = {{.tid = TYPE_INT_ID,.name = "Stop"}};
+	static SigInput ins[] = {{.var = {.tid = TYPE_INT_ID,.name = "Stop"}}};
+	Func func = {
+		.name = "frontend_loop",
+		.sig.ins = {.data = ins,.len = 1},
+		.types = test_type_slice(),
+		.vars = {.data = vars,.len = 1},
+	};
+	Frontend fe;
+	frontend_init(&fe,NULL,&func);
+	assert(frontend_add_core_words(&fe));
+	assert(frontend_compile_source(&fe,
+		"Loop If (Stop) Break Else Continue Done Again"));
+
+	VmCode code = vm_compile_no_defers(&func,NULL);
+	assert(code.data);
+	VM vm;
+	vm_init_for_test(&vm);
+	num_t stop = 1;
+	assert(vm_push_param(&vm,&stop) == VM_OK);
+	assert(vm_run(&vm,code.data) == VM_OK);
+
+	vm_code_free(&code);
+	vm_free(&vm);
+	frontend_free(&fe);
+	free(func.blocks.data);
+	free(func.ops.data);
+}
+
+static void test_epilogues_lower_and_run(void){
+	static Var vars[] = {
+		{.tid = TYPE_INT_ID,.name = "Y"},
+		{.tid = TYPE_INT_ID,.name = "BodyValue"},
+		{.tid = TYPE_INT_ID,.name = "CleanupValue"},
+	};
+	static Var outs[] = {{.tid = TYPE_INT_ID,.name = "Y"}};
+	static SigInput ins[] = {
+		{.var = {.tid = TYPE_INT_ID,.name = "BodyValue"}},
+		{.var = {.tid = TYPE_INT_ID,.name = "CleanupValue"}},
+	};
+	Func func = {
+		.name = "frontend_epilogue",
+		.sig = {.outs = {.data = outs,.len = 1},.ins = {.data = ins,.len = 2}},
+		.types = test_type_slice(),
+		.vars = {.data = vars,.len = 3},
+	};
+	Frontend fe;
+	frontend_init(&fe,NULL,&func);
+	assert(frontend_add_core_words(&fe));
+	assert(frontend_compile_source(&fe,
+		"Start (Y BodyValue Assign) Finally (Y CleanupValue Assign) End"));
+	remove_defers(&func.blocks);
+
+	VmCode code = vm_compile_no_defers(&func,NULL);
+	assert(code.data);
+	VM vm;
+	vm_init_for_test(&vm);
+	num_t y = 0;
+	num_t body = 11;
+	num_t cleanup = 42;
+	assert(vm_push_param(&vm,&y) == VM_OK);
+	assert(vm_push_param(&vm,&body) == VM_OK);
+	assert(vm_push_param(&vm,&cleanup) == VM_OK);
+	assert(vm_run(&vm,code.data) == VM_OK);
+	assert(y == 42);
+
+	vm_code_free(&code);
+	vm_free(&vm);
+	frontend_free(&fe);
+	free(func.blocks.data);
+	free(func.ops.data);
+
+	static Var break_vars[] = {
+		{.tid = TYPE_INT_ID,.name = "Y"},
+		{.tid = TYPE_INT_ID,.name = "Stop"},
+		{.tid = TYPE_INT_ID,.name = "CleanupValue"},
+	};
+	static SigInput break_ins[] = {
+		{.var = {.tid = TYPE_INT_ID,.name = "Stop"}},
+		{.var = {.tid = TYPE_INT_ID,.name = "CleanupValue"}},
+	};
+	func = (Func){
+		.name = "frontend_break_through_epilogue",
+		.sig = {.outs = {.data = outs,.len = 1},.ins = {.data = break_ins,.len = 2}},
+		.types = test_type_slice(),
+		.vars = {.data = break_vars,.len = 3},
+	};
+	frontend_init(&fe,NULL,&func);
+	assert(frontend_add_core_words(&fe));
+	assert(frontend_compile_source(&fe,
+		"Loop Start If (Stop) Break Done Finally (Y CleanupValue Assign) End Again"));
+	remove_defers(&func.blocks);
+	code = vm_compile_no_defers(&func,NULL);
+	assert(code.data);
+	vm_init_for_test(&vm);
+	y = 0;
+	num_t stop = 1;
+	cleanup = 93;
+	assert(vm_push_param(&vm,&y) == VM_OK);
+	assert(vm_push_param(&vm,&stop) == VM_OK);
+	assert(vm_push_param(&vm,&cleanup) == VM_OK);
+	assert(vm_run(&vm,code.data) == VM_OK);
+	assert(y == 93);
+
+	vm_code_free(&code);
+	vm_free(&vm);
+	frontend_free(&fe);
+	free(func.blocks.data);
+	free(func.ops.data);
+}
+
+static void test_prefix_defer_and_cleanup_exit_rules(void){
+	static Var vars[] = {
+		{.tid = TYPE_INT_ID,.name = "Y"},
+		{.tid = TYPE_INT_ID,.name = "BodyValue"},
+		{.tid = TYPE_INT_ID,.name = "CleanupValue"},
+	};
+	static Var outs[] = {{.tid = TYPE_INT_ID,.name = "Y"}};
+	static SigInput ins[] = {
+		{.var = {.tid = TYPE_INT_ID,.name = "BodyValue"}},
+		{.var = {.tid = TYPE_INT_ID,.name = "CleanupValue"}},
+	};
+	Func func = {
+		.name = "frontend_defer",
+		.sig = {.outs = {.data = outs,.len = 1},.ins = {.data = ins,.len = 2}},
+		.types = test_type_slice(),
+		.vars = {.data = vars,.len = 3},
+	};
+	Frontend fe;
+	frontend_init(&fe,NULL,&func);
+	assert(frontend_add_core_words(&fe));
+	assert(frontend_compile_source(&fe,
+		"Defer (Y CleanupValue Assign) (Y BodyValue Assign)"));
+	remove_defers(&func.blocks);
+	VmCode code = vm_compile_no_defers(&func,NULL);
+	assert(code.data);
+
+	vm_code_free(&code);
+	frontend_free(&fe);
+	free(func.blocks.data);
+	free(func.ops.data);
+
+	Func invalid = {.name = "bad_cleanup_break",.types = test_type_slice()};
+	frontend_init(&fe,NULL,&invalid);
+	assert(frontend_add_core_words(&fe));
+	assert(!frontend_compile_source(&fe,"Loop Start Finally Break End Again"));
+	assert(fe.error == FRONTEND_BAD_CONTROL_FLOW);
+	frontend_free(&fe);
+	free(invalid.blocks.data);
+}
+
 int main(void){
 	test_basic_frontend_assignment();
 	puts("ok: test_basic_frontend_assignment");
@@ -272,6 +467,14 @@ int main(void){
 	puts("ok: test_utf8_names_and_unicode_whitespace");
 	test_ir_interpreter_handles_empty_source_and_recovers();
 	puts("ok: test_ir_interpreter_handles_empty_source_and_recovers");
+	test_if_selects_an_arm();
+	puts("ok: test_if_selects_an_arm");
+	test_loop_break_and_continue_targets();
+	puts("ok: test_loop_break_and_continue_targets");
+	test_epilogues_lower_and_run();
+	puts("ok: test_epilogues_lower_and_run");
+	test_prefix_defer_and_cleanup_exit_rules();
+	puts("ok: test_prefix_defer_and_cleanup_exit_rules");
 	puts("frontend tests passed");
 	return 0;
 }

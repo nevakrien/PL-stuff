@@ -109,6 +109,52 @@ Immediate function words are registered with a `func_idx`, not a `Func*`, and re
 
 The frontend's outer interpreter is itself a tree-IR function. Its `BLOCK_LOOP` calls VM-native token and word-engagement primitives, branches on end-of-input, and exits with `BLOCK_BREAK`. Word lookup, IR mutation, and recursive type parsing remain native operations for now; immediate language functions run on a separate macro VM.
 
+### Frontend Control Flow
+
+Control-flow words incrementally build the block tree while the self-hosted outer interpreter consumes tokens. The frontend keeps a scope stack so `Else`, `Break`, and `Continue` attach to the nearest valid construct.
+
+`Loop` opens an unconditional loop and `Again` closes it. `Break` exits the nearest loop; `Continue` finishes its current body iteration:
+
+```text
+Loop
+	If (Condition)
+		Break
+	Else
+		(DoWork)
+		Continue
+	Done
+Again
+```
+
+`If` requires a parenthesized condition operation range. `Else` is optional, and `Done` closes the branch:
+
+```text
+If (Ready)
+	(OnReady)
+Else
+	(OnNotReady)
+Done
+```
+
+`Start ... Finally ... End` builds a `BLOCK_DEFER`; the `Finally` body runs on normal completion, a break crossing the block, or a soft crash after defer lowering:
+
+```text
+Start
+	(UseResource)
+Finally
+	(ReleaseResource)
+End
+```
+
+The prefix spelling wraps the remainder of the form and closes implicitly at end of input:
+
+```text
+Defer (ReleaseResource)
+(UseResource)
+```
+
+An epilogue may contain and exit loops declared inside itself, but it may not `Break` or `Continue` to a loop outside the epilogue. Generated functions containing epilogues still use the IR's explicit lowering step: call `remove_defers(&func.blocks)` before `vm_compile_no_defers`. The REPL performs this step automatically when a form is completed.
+
 
 
 

@@ -45,6 +45,7 @@ void frontend_free(Frontend* fe){
 	free(fe->owned_names.data);
 	free(fe->owned_globals.data);
 	free(fe->words.data);
+	free(fe->scopes.data);
 	vm_free(&fe->macro_vm);
 	vm_free(&fe->interpreter_vm);
 	*fe = (Frontend){0};
@@ -107,6 +108,9 @@ bool frontend_add_word_immediate(Frontend* fe,const char* name,func_idx idx){
 
 bool frontend_add_core_words(Frontend* fe){
 	FrontendImmediate var = {.kind = FRONTEND_IMMEDIATE_VAR};
+	#define CONTROL_WORD(spelling, control) \
+		frontend_add_word(fe,(FrontendWord){.name = (spelling),.kind = FRONTEND_WORD_IMMEDIATE, \
+			.data.immediate = {.kind = (control)}})
 	return frontend_add_word(fe,(FrontendWord){.name = "Var",.kind = FRONTEND_WORD_IMMEDIATE,.data.immediate = var})
 		&& frontend_add_word_op(fe,"Assign",(OP){.kind = OP_ASSIGN})
 		&& frontend_add_word_op(fe,"Add",(OP){.kind = OP_ADD_ASSIGN})
@@ -117,7 +121,19 @@ bool frontend_add_core_words(Frontend* fe){
 		&& frontend_add_word_op(fe,"Or",(OP){.kind = OP_OR_ASSIGN})
 		&& frontend_add_word_op(fe,"Xor",(OP){.kind = OP_XOR_ASSIGN})
 		&& frontend_add_word_op(fe,"BitNot",(OP){.kind = OP_BIT_NOT_ASSIGN})
-		&& frontend_add_word_op(fe,"CallNative",(OP){.kind = OP_CALL_NATIVE_ON_STACK});
+		&& frontend_add_word_op(fe,"CallNative",(OP){.kind = OP_CALL_NATIVE_ON_STACK})
+		&& CONTROL_WORD("Loop",FRONTEND_IMMEDIATE_LOOP)
+		&& CONTROL_WORD("Again",FRONTEND_IMMEDIATE_AGAIN)
+		&& CONTROL_WORD("If",FRONTEND_IMMEDIATE_IF)
+		&& CONTROL_WORD("Else",FRONTEND_IMMEDIATE_ELSE)
+		&& CONTROL_WORD("Done",FRONTEND_IMMEDIATE_DONE)
+		&& CONTROL_WORD("Break",FRONTEND_IMMEDIATE_BREAK)
+		&& CONTROL_WORD("Continue",FRONTEND_IMMEDIATE_CONTINUE)
+		&& CONTROL_WORD("Start",FRONTEND_IMMEDIATE_START)
+		&& CONTROL_WORD("Finally",FRONTEND_IMMEDIATE_FINALLY)
+		&& CONTROL_WORD("End",FRONTEND_IMMEDIATE_END)
+		&& CONTROL_WORD("Defer",FRONTEND_IMMEDIATE_DEFER);
+	#undef CONTROL_WORD
 }
 
 bool frontend_emit_op(Frontend* fe,OP op){
@@ -133,6 +149,8 @@ bool frontend_emit_op(Frontend* fe,OP op){
 		fe->op_cap = cap;
 	}
 	fe->func->ops.data[fe->func->ops.len++] = op;
+	if(fe->scopes.len && TOP(fe->scopes).kind == FRONTEND_SCOPE_IF &&
+		TOP(fe->scopes).phase == FRONTEND_SCOPE_CONDITION) return true;
 	Block* basic = &fe->func->blocks.data[fe->current_basic];
 	basic->data.basic.len = (count_t)(fe->func->ops.len - basic->data.basic.start);
 	return true;
@@ -379,6 +397,272 @@ static bool grow_blocks(Frontend* fe,size_t add){
 	return true;
 }
 
+static bool push_scope(Frontend* fe,FrontendScope scope){
+	if(fe->scopes.len >= fe->scopes.cap){
+		size_t cap = fe->scopes.cap ? fe->scopes.cap * 2 : 8;
+		FrontendScope* data = realloc(fe->scopes.data,cap * sizeof(*data));
+		if(!data){ fe->error = FRONTEND_OOM; return false; }
+		fe->scopes.data = data;
+		fe->scopes.cap = cap;
+	}
+	fe->scopes.data[fe->scopes.len++] = scope;
+	return true;
+}
+
+// Replace the current basic block with: old basic; middle; new basic.
+static bool wrap_current(Frontend* fe,Block middle,block_idx* middle_idx,block_idx* after_idx){
+	if(fe->func->blocks.len + 5 >= BLOCK_INVALID || !grow_blocks(fe,5)) return false;
+	block_idx slot = fe->current_basic;
+	block_idx before = (block_idx)fe->func->blocks.len++;
+	block_idx child = (block_idx)fe->func->blocks.len++;
+	block_idx child_chain = (block_idx)fe->func->blocks.len++;
+	block_idx after = (block_idx)fe->func->blocks.len++;
+	block_idx after_chain = (block_idx)fe->func->blocks.len++;
+
+	fe->func->blocks.data[before] = fe->func->blocks.data[slot];
+	fe->func->blocks.data[child] = middle;
+	fe->func->blocks.data[child_chain] = (Block){
+		.kind = BLOCK_CHAIN,.data.chain = {.cur = child,.next = after_chain},
+	};
+	fe->func->blocks.data[after] = (Block){
+		.kind = BLOCK_BASIC,.data.basic = {.start = (op_idx)fe->func->ops.len},
+	};
+	fe->func->blocks.data[after_chain] = (Block){
+		.kind = BLOCK_CHAIN,.data.chain = {.cur = after,.next = BLOCK_INVALID},
+	};
+	fe->func->blocks.data[slot] = (Block){
+		.kind = BLOCK_MANY,.data.chain = {.cur = before,.next = child_chain},
+	};
+	*middle_idx = child;
+	*after_idx = after;
+	return true;
+}
+
+static bool append_basic_block(Frontend* fe,block_idx* idx){
+	if(fe->func->blocks.len + 1 >= BLOCK_INVALID || !grow_blocks(fe,1)) return false;
+	*idx = (block_idx)fe->func->blocks.len++;
+	fe->func->blocks.data[*idx] = (Block){
+		.kind = BLOCK_BASIC,.data.basic = {.start = (op_idx)fe->func->ops.len},
+	};
+	return true;
+}
+
+static bool bad_control(Frontend* fe){
+	fe->error = FRONTEND_BAD_CONTROL_FLOW;
+	fe->error_word = fe->current_token.data;
+	return false;
+}
+
+static bool begin_loop(Frontend* fe){
+	block_idx loop_body;
+	block_idx body;
+	if(!append_basic_block(fe,&body)) return false;
+	if(fe->func->blocks.len + 1 >= BLOCK_INVALID || !grow_blocks(fe,1)) return false;
+	loop_body = (block_idx)fe->func->blocks.len++;
+	fe->func->blocks.data[loop_body] = (Block){
+		.kind = BLOCK_MANY,.data.chain = {.cur = body,.next = BLOCK_INVALID},
+	};
+
+	block_idx loop;
+	block_idx after;
+	count_t parent_depth = fe->scope_depth;
+	if(!wrap_current(fe,(Block){.kind = BLOCK_LOOP,.data.loop.body = loop_body},&loop,&after)) return false;
+	if(!push_scope(fe,(FrontendScope){
+		.kind = FRONTEND_SCOPE_LOOP,
+		.phase = FRONTEND_SCOPE_BODY,
+		.block = loop,
+		.first = loop_body,
+		.after = after,
+		.parent_depth = parent_depth,
+		.break_depth = parent_depth + 2,
+		.continue_depth = parent_depth + 3,
+	})) return false;
+	fe->current_basic = body;
+	fe->scope_depth = parent_depth + 3;
+	return true;
+}
+
+static bool end_loop(Frontend* fe){
+	if(!fe->scopes.len || TOP(fe->scopes).kind != FRONTEND_SCOPE_LOOP) return bad_control(fe);
+	FrontendScope scope = TOP(fe->scopes);
+	fe->scopes.len--;
+	fe->current_basic = scope.after;
+	fe->func->blocks.data[scope.after].data.basic.start = (op_idx)fe->func->ops.len;
+	fe->scope_depth = scope.parent_depth + 1;
+	return true;
+}
+
+static bool begin_if(Frontend* fe){
+	block_idx yes;
+	block_idx no;
+	if(!append_basic_block(fe,&yes) || !append_basic_block(fe,&no)) return false;
+	block_idx branch;
+	block_idx after;
+	count_t parent_depth = fe->scope_depth;
+	if(!wrap_current(fe,(Block){
+		.kind = BLOCK_BRANCH,
+		.data.branch = {
+			.cond = {.start = (op_idx)fe->func->ops.len},
+			.yes = yes,
+			.no = no,
+		},
+	},&branch,&after)) return false;
+	if(!push_scope(fe,(FrontendScope){
+		.kind = FRONTEND_SCOPE_IF,
+		.phase = FRONTEND_SCOPE_WAIT_OPEN,
+		.block = branch,
+		.first = yes,
+		.second = no,
+		.after = after,
+		.parent_depth = parent_depth,
+	})) return false;
+	fe->current_basic = yes;
+	fe->scope_depth = parent_depth + 1;
+	return true;
+}
+
+static bool begin_else(Frontend* fe){
+	if(!fe->scopes.len || TOP(fe->scopes).kind != FRONTEND_SCOPE_IF ||
+		TOP(fe->scopes).phase != FRONTEND_SCOPE_BODY) return bad_control(fe);
+	FrontendScope* scope = &TOP(fe->scopes);
+	scope->phase = FRONTEND_SCOPE_ELSE_BODY;
+	fe->current_basic = scope->second;
+	fe->func->blocks.data[scope->second].data.basic.start = (op_idx)fe->func->ops.len;
+	fe->scope_depth = scope->parent_depth + 1;
+	return true;
+}
+
+static bool end_if(Frontend* fe){
+	if(!fe->scopes.len || TOP(fe->scopes).kind != FRONTEND_SCOPE_IF ||
+		(TOP(fe->scopes).phase != FRONTEND_SCOPE_BODY &&
+		 TOP(fe->scopes).phase != FRONTEND_SCOPE_ELSE_BODY)) return bad_control(fe);
+	FrontendScope scope = TOP(fe->scopes);
+	if(scope.phase == FRONTEND_SCOPE_BODY){
+		fe->func->blocks.data[scope.second].data.basic.start = (op_idx)fe->func->ops.len;
+	}
+	fe->scopes.len--;
+	fe->current_basic = scope.after;
+	fe->func->blocks.data[scope.after].data.basic.start = (op_idx)fe->func->ops.len;
+	fe->scope_depth = scope.parent_depth + 1;
+	return true;
+}
+
+static bool begin_epilogue(Frontend* fe,bool implicit_end){
+	block_idx next;
+	block_idx cleanup;
+	if(!append_basic_block(fe,&next) || !append_basic_block(fe,&cleanup)) return false;
+	block_idx defer;
+	block_idx after;
+	count_t parent_depth = fe->scope_depth;
+	if(!wrap_current(fe,(Block){
+		.kind = BLOCK_DEFER,.data.defer = {.next = next,.defer = cleanup},
+	},&defer,&after)) return false;
+	if(!push_scope(fe,(FrontendScope){
+		.kind = FRONTEND_SCOPE_EPILOGUE,
+		.phase = implicit_end ? FRONTEND_SCOPE_CLEANUP_WAIT_OPEN : FRONTEND_SCOPE_BODY,
+		.block = defer,
+		.first = next,
+		.second = cleanup,
+		.after = after,
+		.parent_depth = parent_depth,
+		.implicit_end = implicit_end,
+	})) return false;
+	fe->current_basic = implicit_end ? cleanup : next;
+	// Lowering adds a BLOCK_MANY around the defer. Count that scope now so a
+	// break crossing the defer still reaches its original loop destination.
+	fe->scope_depth = parent_depth + 2;
+	return true;
+}
+
+static bool begin_cleanup(Frontend* fe){
+	if(!fe->scopes.len || TOP(fe->scopes).kind != FRONTEND_SCOPE_EPILOGUE ||
+		TOP(fe->scopes).implicit_end || TOP(fe->scopes).phase != FRONTEND_SCOPE_BODY) return bad_control(fe);
+	FrontendScope* scope = &TOP(fe->scopes);
+	scope->phase = FRONTEND_SCOPE_CLEANUP;
+	fe->current_basic = scope->second;
+	fe->func->blocks.data[scope->second].data.basic.start = (op_idx)fe->func->ops.len;
+	fe->scope_depth = scope->parent_depth + 2;
+	return true;
+}
+
+static bool finish_epilogue(Frontend* fe){
+	if(!fe->scopes.len || TOP(fe->scopes).kind != FRONTEND_SCOPE_EPILOGUE ||
+		TOP(fe->scopes).implicit_end || TOP(fe->scopes).phase != FRONTEND_SCOPE_CLEANUP) return bad_control(fe);
+	FrontendScope scope = TOP(fe->scopes);
+	fe->scopes.len--;
+	fe->current_basic = scope.after;
+	fe->func->blocks.data[scope.after].data.basic.start = (op_idx)fe->func->ops.len;
+	fe->scope_depth = scope.parent_depth + 1;
+	return true;
+}
+
+static void finish_implicit_epilogues(Frontend* fe){
+	while(fe->scopes.len && TOP(fe->scopes).kind == FRONTEND_SCOPE_EPILOGUE &&
+		TOP(fe->scopes).implicit_end && TOP(fe->scopes).phase == FRONTEND_SCOPE_BODY){
+		FrontendScope scope = TOP(fe->scopes);
+		fe->scopes.len--;
+		fe->current_basic = scope.after;
+		fe->func->blocks.data[scope.after].data.basic.start = (op_idx)fe->func->ops.len;
+		fe->scope_depth = scope.parent_depth + 1;
+	}
+}
+
+static bool cleanup_exit_is_legal(const Frontend* fe,size_t loop_index){
+	for(size_t i=loop_index;i<fe->scopes.len;i++){
+		const FrontendScope* scope = &fe->scopes.data[i];
+		if(scope->kind == FRONTEND_SCOPE_EPILOGUE && scope->phase == FRONTEND_SCOPE_CLEANUP) return false;
+	}
+	return true;
+}
+
+static bool emit_loop_exit(Frontend* fe,bool is_continue){
+	size_t loop_index = fe->scopes.len;
+	while(loop_index && fe->scopes.data[loop_index - 1].kind != FRONTEND_SCOPE_LOOP) loop_index--;
+	if(!loop_index || !cleanup_exit_is_legal(fe,loop_index)) return bad_control(fe);
+	FrontendScope loop = fe->scopes.data[loop_index - 1];
+	count_t target_depth = is_continue ? loop.continue_depth : loop.break_depth;
+	count_t break_depth = fe->scope_depth + 1;
+	if(target_depth > break_depth) return bad_control(fe);
+	count_t level = break_depth - target_depth + 1;
+	block_idx jump;
+	block_idx after;
+	if(!wrap_current(fe,(Block){.kind = BLOCK_BREAK,.data.level = level},&jump,&after)) return false;
+	(void)jump;
+	fe->current_basic = after;
+	fe->scope_depth++;
+	return true;
+}
+
+static bool handle_delimiter(Frontend* fe,bool opening){
+	if(!fe->scopes.len) return true;
+	FrontendScope* scope = &TOP(fe->scopes);
+	if(scope->phase == FRONTEND_SCOPE_WAIT_OPEN || scope->phase == FRONTEND_SCOPE_CLEANUP_WAIT_OPEN){
+		if(!opening) return bad_control(fe);
+		scope->delimiter_depth = 1;
+		scope->phase = scope->kind == FRONTEND_SCOPE_IF ? FRONTEND_SCOPE_CONDITION : FRONTEND_SCOPE_CLEANUP;
+		return true;
+	}
+	if(scope->delimiter_depth){
+		if(opening){ scope->delimiter_depth++; return true; }
+		if(--scope->delimiter_depth) return true;
+		if(scope->kind == FRONTEND_SCOPE_IF){
+			Block* branch = &fe->func->blocks.data[scope->block];
+			branch->data.branch.cond.len = (count_t)(fe->func->ops.len - branch->data.branch.cond.start);
+			scope->phase = FRONTEND_SCOPE_BODY;
+			fe->current_basic = scope->first;
+			fe->func->blocks.data[scope->first].data.basic.start = (op_idx)fe->func->ops.len;
+			return true;
+		}
+
+		// A prefix Defer captures its cleanup first, then wraps the remaining body.
+		scope->phase = FRONTEND_SCOPE_BODY;
+		fe->current_basic = scope->first;
+		fe->func->blocks.data[scope->first].data.basic.start = (op_idx)fe->func->ops.len;
+		return true;
+	}
+	return true;
+}
+
 static bool append_var(Frontend* fe,Var var,var_idx* idx){
 	VarS* vars = &fe->func->vars;
 	if(!fe->var_cap){
@@ -443,6 +727,7 @@ bool frontend_declare_var(Frontend* fe,type_idx tid,FrontendName name){
 	fe->func->blocks.data[chain] = (Block){.kind = BLOCK_CHAIN,.data.chain = {.cur = var_block,.next = BLOCK_INVALID}};
 	fe->func->blocks.data[slot] = (Block){.kind = BLOCK_MANY,.data.chain = {.cur = before,.next = chain}};
 	fe->current_basic = body;
+	fe->scope_depth += 2;
 	return true;
 }
 
@@ -464,7 +749,42 @@ static bool run_var(Frontend* fe){
 	return frontend_parse_type(fe,&tid) && frontend_parse_name(fe,&name) && frontend_declare_var(fe,tid,name);
 }
 
+static bool run_control(Frontend* fe,FrontendImmediateKind kind){
+	if(fe->scopes.len){
+		FrontendScopePhase phase = TOP(fe->scopes).phase;
+		if(phase == FRONTEND_SCOPE_WAIT_OPEN || phase == FRONTEND_SCOPE_CONDITION ||
+			phase == FRONTEND_SCOPE_CLEANUP_WAIT_OPEN) return bad_control(fe);
+	}
+	if(kind == FRONTEND_IMMEDIATE_AGAIN || kind == FRONTEND_IMMEDIATE_ELSE ||
+		kind == FRONTEND_IMMEDIATE_DONE || kind == FRONTEND_IMMEDIATE_FINALLY ||
+		kind == FRONTEND_IMMEDIATE_END) finish_implicit_epilogues(fe);
+	switch(kind){
+	case FRONTEND_IMMEDIATE_LOOP: return begin_loop(fe);
+	case FRONTEND_IMMEDIATE_AGAIN: return end_loop(fe);
+	case FRONTEND_IMMEDIATE_IF: return begin_if(fe);
+	case FRONTEND_IMMEDIATE_ELSE: return begin_else(fe);
+	case FRONTEND_IMMEDIATE_DONE: return end_if(fe);
+	case FRONTEND_IMMEDIATE_BREAK: return emit_loop_exit(fe,false);
+	case FRONTEND_IMMEDIATE_CONTINUE: return emit_loop_exit(fe,true);
+	case FRONTEND_IMMEDIATE_START: return begin_epilogue(fe,false);
+	case FRONTEND_IMMEDIATE_FINALLY: return begin_cleanup(fe);
+	case FRONTEND_IMMEDIATE_END: return finish_epilogue(fe);
+	case FRONTEND_IMMEDIATE_DEFER: return begin_epilogue(fe,true);
+	case FRONTEND_IMMEDIATE_FUNC:
+	case FRONTEND_IMMEDIATE_VAR:
+		break;
+	}
+	return false;
+}
+
+static bool ready_for_word(Frontend* fe){
+	if(!fe->scopes.len) return true;
+	FrontendScopePhase phase = TOP(fe->scopes).phase;
+	return phase != FRONTEND_SCOPE_WAIT_OPEN && phase != FRONTEND_SCOPE_CLEANUP_WAIT_OPEN;
+}
+
 static bool engage_word(Frontend* fe,const FrontendWord* word){
+	if(!ready_for_word(fe)) return bad_control(fe);
 	switch(word->kind){
 	case FRONTEND_WORD_OP:
 		return frontend_emit_op(fe,word->data.op);
@@ -475,12 +795,16 @@ static bool engage_word(Frontend* fe,const FrontendWord* word){
 			&& frontend_emit_op(fe,(OP){.kind = OP_CALL_NATIVE_ON_STACK});
 	case FRONTEND_WORD_IMMEDIATE:
 		if(word->data.immediate.kind == FRONTEND_IMMEDIATE_VAR) return run_var(fe);
-		return run_immediate(fe,word->data.immediate.func);
+		if(word->data.immediate.kind == FRONTEND_IMMEDIATE_FUNC){
+			return run_immediate(fe,word->data.immediate.func);
+		}
+		return run_control(fe,word->data.immediate.kind);
 	}
 	return false;
 }
 
 static bool compile_fallback(Frontend* fe,const char* token,size_t len){
+	if(!ready_for_word(fe)) return bad_control(fe);
 	if(emit_named_var(fe,token,len)) return true;
 	if(isdigit((unsigned char)token[0]) || token[0] == '-' || token[0] == '+'){
 		return emit_number(fe,token,len);
@@ -505,7 +829,7 @@ static VM_RESULT interpreter_lookup_word(VM* vm){
 	num_t* handle = TOP(vm->param_stack);
 	FrontendName token = fe->current_token;
 	if(token.len == 1 && (token.data[0] == '(' || token.data[0] == ')')){
-		*handle = -1;
+		*handle = token.data[0] == '(' ? -1 : -2;
 		return VM_OK;
 	}
 	const FrontendWord* word = find_word(fe,token.data,token.len);
@@ -517,7 +841,9 @@ static VM_RESULT interpreter_engage_word(VM* vm){
 	if(!vm || !vm->user || !vm->param_stack.len) return VM_INVALID_ARG;
 	Frontend* fe = vm->user;
 	num_t handle = *(const num_t*)TOP(vm->param_stack);
-	if(handle == -1) return VM_OK;
+	if(handle == -1 || handle == -2){
+		return handle_delimiter(fe,handle == -1) ? VM_OK : VM_HARD_CRASH;
+	}
 	if(handle <= 0 || (uintmax_t)(handle - 1) >= fe->words.len) return VM_INVALID_ARG;
 	return engage_word(fe,&fe->words.data[handle - 1]) ? VM_OK : VM_HARD_CRASH;
 }
@@ -728,6 +1054,11 @@ bool frontend_compile_source(Frontend* fe,const char* source){
 	fe->interpreter_vm.crash_stack.len = 0;
 	if(fe->interpreter_result != VM_OK){
 		if(fe->error == FRONTEND_OK) fe->error = FRONTEND_INTERPRETER_RUNTIME_FAILED;
+		return false;
+	}
+	finish_implicit_epilogues(fe);
+	if(fe->scopes.len){
+		fe->error = FRONTEND_BAD_CONTROL_FLOW;
 		return false;
 	}
 	return true;
