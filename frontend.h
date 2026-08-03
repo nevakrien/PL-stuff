@@ -14,6 +14,8 @@ typedef enum FrontendError {
 	FRONTEND_DUPLICATE_VAR,
 	FRONTEND_MACRO_COMPILE_FAILED,
 	FRONTEND_MACRO_RUNTIME_FAILED,
+	FRONTEND_INTERPRETER_COMPILE_FAILED,
+	FRONTEND_INTERPRETER_RUNTIME_FAILED,
 } FrontendError;
 
 typedef enum FrontendWordKind {
@@ -56,7 +58,9 @@ typedef struct Frontend {
 	Func* func;
 	STACK(FrontendWord) words;
 	VM macro_vm;
+	VM interpreter_vm;
 	FrontendParser parser;
+	FrontendName current_token;
 	STACK(char*) owned_names;
 	STACK(uoffset_t) owned_globals;
 	size_t op_cap;
@@ -67,6 +71,7 @@ typedef struct Frontend {
 	FrontendError error;
 	const char* error_word;
 	VM_RESULT macro_result;
+	VM_RESULT interpreter_result;
 } Frontend;
 
 void frontend_init(Frontend* fe,CompileContext* ctx,Func* func);

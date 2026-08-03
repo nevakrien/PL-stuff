@@ -107,6 +107,8 @@ The type mini-language recognizes `Int`, `Byte`, `Slice <type>`, `View <type>`, 
 
 Immediate function words are registered with a `func_idx`, not a `Func*`, and resolve through `CompileContext.funcs` when invoked. The active parser is also available to native code running on the macro VM through `vm_parse_name`, `vm_parse_number`, and `vm_parse_type`. These use typed C output parameters outside the VM data stack; parser results must not be presented as ordinary IR values until the IR has real `Name` and `Type` types.
 
+The frontend's outer interpreter is itself a tree-IR function. Its `BLOCK_LOOP` calls VM-native token and word-engagement primitives, branches on end-of-input, and exits with `BLOCK_BREAK`. Word lookup, IR mutation, and recursive type parsing remain native operations for now; immediate language functions run on a separate macro VM.
+
 
 
 

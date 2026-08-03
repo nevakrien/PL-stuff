@@ -233,6 +233,32 @@ static void test_utf8_names_and_unicode_whitespace(void){
 	free(func.blocks.data);
 }
 
+static void test_ir_interpreter_handles_empty_source_and_recovers(void){
+	Func func = {.name = "interpreter_recovery",.types = test_type_slice()};
+	Frontend fe;
+	frontend_init(&fe,NULL,&func);
+	assert(frontend_add_core_words(&fe));
+
+	assert(frontend_compile_source(&fe,""));
+	assert(fe.interpreter_result == VM_OK);
+	assert(func.ops.len == 0);
+
+	assert(!frontend_compile_source(&fe,"MissingWord"));
+	assert(fe.error == FRONTEND_UNKNOWN_WORD);
+	assert(fe.interpreter_result == VM_HARD_CRASH);
+	assert(fe.interpreter_vm.storage.len == 0);
+	assert(fe.interpreter_vm.param_stack.len == 0);
+	assert(fe.interpreter_vm.crash_stack.len == 0);
+
+	assert(frontend_compile_source(&fe,"()"));
+	assert(fe.interpreter_result == VM_OK);
+	assert(func.ops.len == 0);
+
+	frontend_free(&fe);
+	free(func.blocks.data);
+	free(func.ops.data);
+}
+
 int main(void){
 	test_basic_frontend_assignment();
 	puts("ok: test_basic_frontend_assignment");
@@ -244,6 +270,8 @@ int main(void){
 	puts("ok: test_vm_parser_services");
 	test_utf8_names_and_unicode_whitespace();
 	puts("ok: test_utf8_names_and_unicode_whitespace");
+	test_ir_interpreter_handles_empty_source_and_recovers();
+	puts("ok: test_ir_interpreter_handles_empty_source_and_recovers");
 	puts("frontend tests passed");
 	return 0;
 }

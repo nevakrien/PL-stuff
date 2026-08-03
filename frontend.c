@@ -46,6 +46,7 @@ void frontend_free(Frontend* fe){
 	free(fe->owned_globals.data);
 	free(fe->words.data);
 	vm_free(&fe->macro_vm);
+	vm_free(&fe->interpreter_vm);
 	*fe = (Frontend){0};
 }
 
@@ -463,25 +464,23 @@ static bool run_var(Frontend* fe){
 	return frontend_parse_type(fe,&tid) && frontend_parse_name(fe,&name) && frontend_declare_var(fe,tid,name);
 }
 
-static bool compile_token(Frontend* fe,const char* token,size_t len){
-	if(len == 1 && (token[0] == '(' || token[0] == ')')) return true;
-
-	const FrontendWord* word = find_word(fe,token,len);
-	if(word){
-		switch(word->kind){
-		case FRONTEND_WORD_OP:
-			return frontend_emit_op(fe,word->data.op);
-		case FRONTEND_WORD_FUNC:
-			return frontend_emit_op(fe,(OP){.kind = OP_CALL,.extra = word->data.func});
-		case FRONTEND_WORD_NATIVE:
-			return frontend_emit_op(fe,(OP){.kind = OP_PUSH_GLOBAL,.extra = word->data.global})
-				&& frontend_emit_op(fe,(OP){.kind = OP_CALL_NATIVE_ON_STACK});
-		case FRONTEND_WORD_IMMEDIATE:
-			if(word->data.immediate.kind == FRONTEND_IMMEDIATE_VAR) return run_var(fe);
-			return run_immediate(fe,word->data.immediate.func);
-		}
+static bool engage_word(Frontend* fe,const FrontendWord* word){
+	switch(word->kind){
+	case FRONTEND_WORD_OP:
+		return frontend_emit_op(fe,word->data.op);
+	case FRONTEND_WORD_FUNC:
+		return frontend_emit_op(fe,(OP){.kind = OP_CALL,.extra = word->data.func});
+	case FRONTEND_WORD_NATIVE:
+		return frontend_emit_op(fe,(OP){.kind = OP_PUSH_GLOBAL,.extra = word->data.global})
+			&& frontend_emit_op(fe,(OP){.kind = OP_CALL_NATIVE_ON_STACK});
+	case FRONTEND_WORD_IMMEDIATE:
+		if(word->data.immediate.kind == FRONTEND_IMMEDIATE_VAR) return run_var(fe);
+		return run_immediate(fe,word->data.immediate.func);
 	}
+	return false;
+}
 
+static bool compile_fallback(Frontend* fe,const char* token,size_t len){
 	if(emit_named_var(fe,token,len)) return true;
 	if(isdigit((unsigned char)token[0]) || token[0] == '-' || token[0] == '+'){
 		return emit_number(fe,token,len);
@@ -492,15 +491,244 @@ static bool compile_token(Frontend* fe,const char* token,size_t len){
 	return false;
 }
 
+static VM_RESULT interpreter_next_token(VM* vm){
+	if(!vm || !vm->user || !vm->param_stack.len) return VM_INVALID_ARG;
+	Frontend* fe = vm->user;
+	num_t* has_token = TOP(vm->param_stack);
+	*has_token = next_token(fe,&fe->current_token);
+	return VM_OK;
+}
+
+static VM_RESULT interpreter_lookup_word(VM* vm){
+	if(!vm || !vm->user || !vm->param_stack.len) return VM_INVALID_ARG;
+	Frontend* fe = vm->user;
+	num_t* handle = TOP(vm->param_stack);
+	FrontendName token = fe->current_token;
+	if(token.len == 1 && (token.data[0] == '(' || token.data[0] == ')')){
+		*handle = -1;
+		return VM_OK;
+	}
+	const FrontendWord* word = find_word(fe,token.data,token.len);
+	*handle = word ? (num_t)(word - fe->words.data) + 1 : 0;
+	return VM_OK;
+}
+
+static VM_RESULT interpreter_engage_word(VM* vm){
+	if(!vm || !vm->user || !vm->param_stack.len) return VM_INVALID_ARG;
+	Frontend* fe = vm->user;
+	num_t handle = *(const num_t*)TOP(vm->param_stack);
+	if(handle == -1) return VM_OK;
+	if(handle <= 0 || (uintmax_t)(handle - 1) >= fe->words.len) return VM_INVALID_ARG;
+	return engage_word(fe,&fe->words.data[handle - 1]) ? VM_OK : VM_HARD_CRASH;
+}
+
+static VM_RESULT interpreter_fallback(VM* vm){
+	if(!vm || !vm->user) return VM_INVALID_ARG;
+	Frontend* fe = vm->user;
+	FrontendName token = fe->current_token;
+	return compile_fallback(fe,token.data,token.len) ? VM_OK : VM_HARD_CRASH;
+}
+
+static VmCode compile_interpreter(void){
+	enum {
+		INTERPRETER_NEXT_TOKEN_TYPE = 2,
+		INTERPRETER_LOOKUP_WORD_TYPE,
+		INTERPRETER_ENGAGE_WORD_TYPE,
+		INTERPRETER_FALLBACK_TYPE,
+	};
+	enum {
+		INTERPRETER_NEXT_TOKEN_GLOBAL,
+		INTERPRETER_LOOKUP_WORD_GLOBAL,
+		INTERPRETER_ENGAGE_WORD_GLOBAL,
+		INTERPRETER_FALLBACK_GLOBAL,
+	};
+	enum {
+		INTERPRETER_ROOT,
+		INTERPRETER_WORD_VAR,
+		INTERPRETER_LOOP,
+		INTERPRETER_LOOP_BODY,
+		INTERPRETER_READ,
+		INTERPRETER_BODY_CHAIN,
+		INTERPRETER_HAS_TOKEN,
+		INTERPRETER_LOOKUP_BODY,
+		INTERPRETER_LOOKUP,
+		INTERPRETER_LOOKUP_CHAIN,
+		INTERPRETER_WORD_FOUND,
+		INTERPRETER_ENGAGE_WORD,
+		INTERPRETER_FALLBACK,
+		INTERPRETER_BREAK,
+		INTERPRETER_BLOCK_COUNT,
+	};
+
+	static Var next_token_outs[] = {{.tid = TYPE_INT_ID,.name = "has_token"}};
+	static Var lookup_word_outs[] = {{.tid = TYPE_INT_ID,.name = "word_handle"}};
+	static SigInput engage_word_ins[] = {{.var = {.tid = TYPE_INT_ID,.name = "word_handle"}}};
+	static Type types[] = {
+		[0] = {.kind = TYPE_INT,.name = "int"},
+		[1] = {.kind = TYPE_BYTE,.name = "byte"},
+		[INTERPRETER_NEXT_TOKEN_TYPE] = {
+			.kind = TYPE_NATIVE_FUNC_POINTER,
+			.name = "next_token",
+			.data.sig.outs = {.data = next_token_outs,.len = 1},
+		},
+		[INTERPRETER_LOOKUP_WORD_TYPE] = {
+			.kind = TYPE_NATIVE_FUNC_POINTER,
+			.name = "lookup_word",
+			.data.sig.outs = {.data = lookup_word_outs,.len = 1},
+		},
+		[INTERPRETER_ENGAGE_WORD_TYPE] = {
+			.kind = TYPE_NATIVE_FUNC_POINTER,
+			.name = "engage_word",
+			.data.sig.ins = {.data = engage_word_ins,.len = 1},
+		},
+		[INTERPRETER_FALLBACK_TYPE] = {
+			.kind = TYPE_NATIVE_FUNC_POINTER,
+			.name = "interpret_fallback",
+		},
+	};
+	static Var vars[] = {
+		{.tid = TYPE_INT_ID,.name = "has_token"},
+		{.tid = TYPE_INT_ID,.name = "word_handle"},
+	};
+	static OP ops[] = {
+		{.kind = OP_PUSH_VAR,.extra = 0},
+		{.kind = OP_PUSH_GLOBAL,.extra = INTERPRETER_NEXT_TOKEN_GLOBAL},
+		{.kind = OP_CALL_NATIVE_ON_STACK},
+		{.kind = OP_PUSH_VAR,.extra = 0},
+		{.kind = OP_PUSH_VAR,.extra = 1},
+		{.kind = OP_PUSH_GLOBAL,.extra = INTERPRETER_LOOKUP_WORD_GLOBAL},
+		{.kind = OP_CALL_NATIVE_ON_STACK},
+		{.kind = OP_PUSH_VAR,.extra = 1},
+		{.kind = OP_PUSH_VAR,.extra = 1},
+		{.kind = OP_PUSH_GLOBAL,.extra = INTERPRETER_ENGAGE_WORD_GLOBAL},
+		{.kind = OP_CALL_NATIVE_ON_STACK},
+		{.kind = OP_PUSH_GLOBAL,.extra = INTERPRETER_FALLBACK_GLOBAL},
+		{.kind = OP_CALL_NATIVE_ON_STACK},
+	};
+	static Block blocks[INTERPRETER_BLOCK_COUNT] = {
+		[INTERPRETER_ROOT] = {
+			.kind = BLOCK_VAR,
+			.data.var = {.var = 0,.body = INTERPRETER_WORD_VAR},
+		},
+		[INTERPRETER_WORD_VAR] = {
+			.kind = BLOCK_VAR,
+			.data.var = {.var = 1,.body = INTERPRETER_LOOP},
+		},
+		[INTERPRETER_LOOP] = {
+			.kind = BLOCK_LOOP,
+			.data.loop.body = INTERPRETER_LOOP_BODY,
+		},
+		[INTERPRETER_LOOP_BODY] = {
+			.kind = BLOCK_MANY,
+			.data.chain = {.cur = INTERPRETER_READ,.next = INTERPRETER_BODY_CHAIN},
+		},
+		[INTERPRETER_READ] = {
+			.kind = BLOCK_BASIC,
+			.data.basic = {.start = 0,.len = 3},
+		},
+		[INTERPRETER_BODY_CHAIN] = {
+			.kind = BLOCK_CHAIN,
+			.data.chain = {.cur = INTERPRETER_HAS_TOKEN,.next = BLOCK_INVALID},
+		},
+		[INTERPRETER_HAS_TOKEN] = {
+			.kind = BLOCK_BRANCH,
+			.data.branch = {
+				.cond = {.start = 3,.len = 1},
+				.yes = INTERPRETER_LOOKUP_BODY,
+				.no = INTERPRETER_BREAK,
+			},
+		},
+		[INTERPRETER_LOOKUP_BODY] = {
+			.kind = BLOCK_MANY,
+			.data.chain = {.cur = INTERPRETER_LOOKUP,.next = INTERPRETER_LOOKUP_CHAIN},
+		},
+		[INTERPRETER_LOOKUP] = {
+			.kind = BLOCK_BASIC,
+			.data.basic = {.start = 4,.len = 3},
+		},
+		[INTERPRETER_LOOKUP_CHAIN] = {
+			.kind = BLOCK_CHAIN,
+			.data.chain = {.cur = INTERPRETER_WORD_FOUND,.next = BLOCK_INVALID},
+		},
+		[INTERPRETER_WORD_FOUND] = {
+			.kind = BLOCK_BRANCH,
+			.data.branch = {
+				.cond = {.start = 7,.len = 1},
+				.yes = INTERPRETER_ENGAGE_WORD,
+				.no = INTERPRETER_FALLBACK,
+			},
+		},
+		[INTERPRETER_ENGAGE_WORD] = {
+			.kind = BLOCK_BASIC,
+			.data.basic = {.start = 8,.len = 3},
+		},
+		[INTERPRETER_FALLBACK] = {
+			.kind = BLOCK_BASIC,
+			.data.basic = {.start = 11,.len = 2},
+		},
+		[INTERPRETER_BREAK] = {
+			.kind = BLOCK_BREAK,
+			.data.level = 2,
+		},
+	};
+	static VmNativeFunc next_token_fn = interpreter_next_token;
+	static VmNativeFunc lookup_word_fn = interpreter_lookup_word;
+	static VmNativeFunc engage_word_fn = interpreter_engage_word;
+	static VmNativeFunc fallback_fn = interpreter_fallback;
+	Global globals[] = {
+		[INTERPRETER_NEXT_TOKEN_GLOBAL] = {
+			.var = {.tid = INTERPRETER_NEXT_TOKEN_TYPE,.name = "next_token"},
+			.mem = &next_token_fn,
+		},
+		[INTERPRETER_LOOKUP_WORD_GLOBAL] = {
+			.var = {.tid = INTERPRETER_LOOKUP_WORD_TYPE,.name = "lookup_word"},
+			.mem = &lookup_word_fn,
+		},
+		[INTERPRETER_ENGAGE_WORD_GLOBAL] = {
+			.var = {.tid = INTERPRETER_ENGAGE_WORD_TYPE,.name = "engage_word"},
+			.mem = &engage_word_fn,
+		},
+		[INTERPRETER_FALLBACK_GLOBAL] = {
+			.var = {.tid = INTERPRETER_FALLBACK_TYPE,.name = "interpret_fallback"},
+			.mem = &fallback_fn,
+		},
+	};
+	CompileContext ctx = {.globals = {.data = globals,.len = 4,.cap = 4}};
+	Func interpreter = {
+		.name = "frontend_interpreter",
+		.types = {.data = types,.len = sizeof(types) / sizeof(types[0])},
+		.blocks = {.data = blocks,.len = INTERPRETER_BLOCK_COUNT},
+		.ops = {.data = ops,.len = sizeof(ops) / sizeof(ops[0])},
+		.vars = {.data = vars,.len = 2},
+	};
+	return vm_compile_no_defers(&interpreter,&ctx);
+}
+
 bool frontend_compile_source(Frontend* fe,const char* source){
 	if(!frontend_prepare_func(fe)) return false;
 	fe->error = FRONTEND_OK;
 	fe->error_word = NULL;
 
 	fe->parser = (FrontendParser){.source = source,.cursor = source};
-	FrontendName token;
-	while(next_token(fe,&token)){
-		if(!compile_token(fe,token.data,token.len)) return false;
+	fe->current_token = (FrontendName){0};
+	VmCode code = compile_interpreter();
+	if(!code.data){
+		fe->error = FRONTEND_INTERPRETER_COMPILE_FAILED;
+		return false;
+	}
+
+	fe->interpreter_vm.user = fe;
+	fe->interpreter_vm.storage.len = 0;
+	fe->interpreter_vm.param_stack.len = 0;
+	fe->interpreter_vm.crash_stack.len = 0;
+	fe->interpreter_result = vm_run(&fe->interpreter_vm,code.data);
+	vm_code_free(&code);
+	fe->interpreter_vm.storage.len = 0;
+	fe->interpreter_vm.param_stack.len = 0;
+	fe->interpreter_vm.crash_stack.len = 0;
+	if(fe->interpreter_result != VM_OK){
+		if(fe->error == FRONTEND_OK) fe->error = FRONTEND_INTERPRETER_RUNTIME_FAILED;
+		return false;
 	}
 	return true;
 }

@@ -86,6 +86,8 @@ static const char* frontend_error_name(FrontendError error){
 	case FRONTEND_DUPLICATE_VAR: return "duplicate variable";
 	case FRONTEND_MACRO_COMPILE_FAILED: return "immediate compilation failed";
 	case FRONTEND_MACRO_RUNTIME_FAILED: return "immediate execution failed";
+	case FRONTEND_INTERPRETER_COMPILE_FAILED: return "interpreter compilation failed";
+	case FRONTEND_INTERPRETER_RUNTIME_FAILED: return "interpreter execution failed";
 	}
 	return "frontend error";
 }
